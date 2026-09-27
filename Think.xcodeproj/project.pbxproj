@@ -1,0 +1,48 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+EFBCBE51EBE8D4C78E2FA4BE = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Think/Sources/AppDelegate.swift"; sourceTree = SOURCE_ROOT; };
+DB7553EF79ABD36F845C9964 = { isa = PBXBuildFile; fileRef = EFBCBE51EBE8D4C78E2FA4BE; };
+99ADDAAFC64E8CF72473BAB6 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Think/Sources/AppMenu.swift"; sourceTree = SOURCE_ROOT; };
+59B55FAA4F09C792F4B15D73 = { isa = PBXBuildFile; fileRef = 99ADDAAFC64E8CF72473BAB6; };
+C362755D6F8EEE92AA89D0F1 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Think/Sources/EditorView.swift"; sourceTree = SOURCE_ROOT; };
+5BA8949D5DB01115C197548C = { isa = PBXBuildFile; fileRef = C362755D6F8EEE92AA89D0F1; };
+109D67F8B1F57CB7F86CC42E = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Think/Sources/EditorWindowController.swift"; sourceTree = SOURCE_ROOT; };
+865467FDEA10AF1DD231A208 = { isa = PBXBuildFile; fileRef = 109D67F8B1F57CB7F86CC42E; };
+6FDD68E46962A19140E564C4 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Think/Sources/FolderBrowser.swift"; sourceTree = SOURCE_ROOT; };
+55DDF06E36AB59C2CBC39284 = { isa = PBXBuildFile; fileRef = 6FDD68E46962A19140E564C4; };
+B2E2E62D240EC6337B46EB2D = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Think/Sources/NoteDocument.swift"; sourceTree = SOURCE_ROOT; };
+039DA486A44F408772CA2E4E = { isa = PBXBuildFile; fileRef = B2E2E62D240EC6337B46EB2D; };
+57A931DD8ED7D135B4D9170D = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Think/Sources/PlainText.swift"; sourceTree = SOURCE_ROOT; };
+0C01C96EB2B3DE44B209E22C = { isa = PBXBuildFile; fileRef = 57A931DD8ED7D135B4D9170D; };
+1743C3887669E833F9BA9764 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Think/Sources/main.swift"; sourceTree = SOURCE_ROOT; };
+D0D1D01FBAD0212B2847EEE5 = { isa = PBXBuildFile; fileRef = 1743C3887669E833F9BA9764; };
+632A3EB097694035D19EB3CA = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ThinkTests/ThinkTests.swift"; sourceTree = SOURCE_ROOT; };
+ADDE2E9FD2E6C4F15CE84D73 = { isa = PBXBuildFile; fileRef = 632A3EB097694035D19EB3CA; };
+0112DAE3F84CB4DF5179BE01 = { isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Think/Resources/Info.plist; sourceTree = SOURCE_ROOT; };
+E6FC57C251E9E1BEC1D3C0D2 = { isa = PBXFileReference; explicitFileType = wrapper.application; path = Think.app; sourceTree = BUILT_PRODUCTS_DIR; };
+B7480EC88B7F22D0A4757273 = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ThinkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+482182478A3ECD4745BEA917 = { isa = PBXGroup; name = Think; children = (EFBCBE51EBE8D4C78E2FA4BE,99ADDAAFC64E8CF72473BAB6,C362755D6F8EEE92AA89D0F1,109D67F8B1F57CB7F86CC42E,6FDD68E46962A19140E564C4,B2E2E62D240EC6337B46EB2D,57A931DD8ED7D135B4D9170D,1743C3887669E833F9BA9764,0112DAE3F84CB4DF5179BE01,); sourceTree = "<group>"; };
+8B7A6DECC0651D269EA794C7 = { isa = PBXGroup; name = ThinkTests; children = (632A3EB097694035D19EB3CA,); sourceTree = "<group>"; };
+1EE63A94BAD0DF0FCB0E7B8C = { isa = PBXGroup; name = Products; children = (E6FC57C251E9E1BEC1D3C0D2,B7480EC88B7F22D0A4757273,); sourceTree = "<group>"; };
+325F10A6957A34D66CB8C0E4 = { isa = PBXGroup; children = (482182478A3ECD4745BEA917,8B7A6DECC0651D269EA794C7,1EE63A94BAD0DF0FCB0E7B8C,); sourceTree = "<group>"; };
+2D764CD838DB39F040AA7EC4 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (DB7553EF79ABD36F845C9964,59B55FAA4F09C792F4B15D73,5BA8949D5DB01115C197548C,865467FDEA10AF1DD231A208,55DDF06E36AB59C2CBC39284,039DA486A44F408772CA2E4E,0C01C96EB2B3DE44B209E22C,D0D1D01FBAD0212B2847EEE5,); runOnlyForDeploymentPostprocessing = 0; };
+12384B5908BE5FE5B3301CEE = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+06F5DC629BD46AAFD46564D1 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+9F3002A5D69B22D357A58AA9 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (ADDE2E9FD2E6C4F15CE84D73,); runOnlyForDeploymentPostprocessing = 0; };
+99C7943D90D870A50ADE9160 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+C584AE92222380FB29B6223F = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+D799BAE6088A90139B415FCC = { isa = PBXContainerItemProxy; containerPortal = 98F54143AB4E86B28C3AFEE0; proxyType = 1; remoteGlobalIDString = 4F6027D858B72CC70E5CC8E9; remoteInfo = Think; };
+DE58E2B17C19600779694943 = { isa = PBXTargetDependency; target = 4F6027D858B72CC70E5CC8E9; targetProxy = D799BAE6088A90139B415FCC; };
+4F6027D858B72CC70E5CC8E9 = { isa = PBXNativeTarget; buildConfigurationList = F37922C48DA5978D02C9E50E; buildPhases = (2D764CD838DB39F040AA7EC4,12384B5908BE5FE5B3301CEE,06F5DC629BD46AAFD46564D1,); buildRules = (); dependencies = (); name = Think; productName = Think; productReference = E6FC57C251E9E1BEC1D3C0D2; productType = "com.apple.product-type.application"; };
+0A06C5E2DA34E686D888A695 = { isa = PBXNativeTarget; buildConfigurationList = BECB265224D91761C05FDA33; buildPhases = (9F3002A5D69B22D357A58AA9,99C7943D90D870A50ADE9160,C584AE92222380FB29B6223F,); buildRules = (); dependencies = (DE58E2B17C19600779694943,); name = ThinkTests; productName = ThinkTests; productReference = B7480EC88B7F22D0A4757273; productType = "com.apple.product-type.bundle.unit-test"; };
+89E1FD6268CC0F221A2BE178 = { isa = XCBuildConfiguration; name = Debug; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 15.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; ENABLE_TESTABILITY = YES; DEBUG_INFORMATION_FORMAT = dwarf; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; }; };
+E9B2E96ABC5F6856F2BE79CF = { isa = XCBuildConfiguration; name = Debug; buildSettings = { PRODUCT_NAME = Think; PRODUCT_BUNDLE_IDENTIFIER = local.think.editor; INFOPLIST_FILE = Think/Resources/Info.plist; GENERATE_INFOPLIST_FILE = NO; CODE_SIGN_STYLE = Manual; CODE_SIGN_IDENTITY = "-"; COMBINE_HIDPI_IMAGES = YES; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks"; }; };
+FCB48D8F88BCDB0ED9FADFD7 = { isa = XCBuildConfiguration; name = Debug; buildSettings = { PRODUCT_NAME = ThinkTests; PRODUCT_BUNDLE_IDENTIFIER = local.think.editor.tests; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Manual; CODE_SIGN_IDENTITY = "-"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Think.app/Contents/MacOS/Think"; BUNDLE_LOADER = "$(TEST_HOST)"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks"; }; };
+E6DE6C99132752C914FEF632 = { isa = XCBuildConfiguration; name = Release; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 15.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; }; };
+5A8C91857F674E16E2724F47 = { isa = XCBuildConfiguration; name = Release; buildSettings = { PRODUCT_NAME = Think; PRODUCT_BUNDLE_IDENTIFIER = local.think.editor; INFOPLIST_FILE = Think/Resources/Info.plist; GENERATE_INFOPLIST_FILE = NO; CODE_SIGN_STYLE = Manual; CODE_SIGN_IDENTITY = "-"; COMBINE_HIDPI_IMAGES = YES; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks"; }; };
+942EEBBACD6C88CAE7F29B29 = { isa = XCBuildConfiguration; name = Release; buildSettings = { PRODUCT_NAME = ThinkTests; PRODUCT_BUNDLE_IDENTIFIER = local.think.editor.tests; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Manual; CODE_SIGN_IDENTITY = "-"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Think.app/Contents/MacOS/Think"; BUNDLE_LOADER = "$(TEST_HOST)"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks"; }; };
+862894B703A6DEDF96A9DD6C = { isa = XCConfigurationList; buildConfigurations = (89E1FD6268CC0F221A2BE178,E6DE6C99132752C914FEF632,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+F37922C48DA5978D02C9E50E = { isa = XCConfigurationList; buildConfigurations = (E9B2E96ABC5F6856F2BE79CF,5A8C91857F674E16E2724F47,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+BECB265224D91761C05FDA33 = { isa = XCConfigurationList; buildConfigurations = (FCB48D8F88BCDB0ED9FADFD7,942EEBBACD6C88CAE7F29B29,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+98F54143AB4E86B28C3AFEE0 = { isa = PBXProject; attributes = { LastUpgradeCheck = 2620; }; buildConfigurationList = 862894B703A6DEDF96A9DD6C; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en,Base); mainGroup = 325F10A6957A34D66CB8C0E4; productRefGroup = 1EE63A94BAD0DF0FCB0E7B8C; projectDirPath = ""; projectRoot = ""; targets = (4F6027D858B72CC70E5CC8E9,0A06C5E2DA34E686D888A695,); };
+}; rootObject = 98F54143AB4E86B28C3AFEE0; }
