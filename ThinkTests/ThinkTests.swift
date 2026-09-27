@@ -84,6 +84,75 @@ final class DocumentTests: XCTestCase {
         XCTAssertEqual(window.frame, original)
     }
 
+    func testSidebarOpensAndClosesAfterTransition() throws {
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        controller.showWindow(nil)
+        let split = try XCTUnwrap(window.contentView as? NSSplitView)
+        let sidebar = try XCTUnwrap(split.arrangedSubviews.first)
+        XCTAssertTrue(sidebar.isHidden)
+
+        controller.toggleSidebar(nil)
+        XCTAssertFalse(sidebar.isHidden)
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            XCTAssertLessThan(sidebar.frame.width, 240)
+        }
+        let opened = expectation(description: "Sidebar opens")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            XCTAssertEqual(sidebar.frame.width, 240, accuracy: 2)
+            opened.fulfill()
+        }
+        wait(for: [opened], timeout: 1)
+
+        controller.toggleSidebar(nil)
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            XCTAssertGreaterThan(sidebar.frame.width, 0)
+        }
+        let closed = expectation(description: "Sidebar closes")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            XCTAssertTrue(sidebar.isHidden)
+            closed.fulfill()
+        }
+        wait(for: [closed], timeout: 1)
+    }
+
+    func testNarrowWindowProtectsTitlebar() throws {
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        let backdrop = try XCTUnwrap(controller.editor.subviews.first { $0 is TitlebarBackdropView })
+        window.setContentSize(NSSize(width: 480, height: 500))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertFalse(backdrop.isHidden)
+        XCTAssertEqual(backdrop.frame.height, EditorMetrics.titlebarHeight)
+
+        window.setContentSize(NSSize(width: 1280, height: 800))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertTrue(backdrop.isHidden)
+    }
+
+    func testTextPointerIsLimitedToRenderedText() throws {
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        controller.showWindow(nil)
+        window.setContentSize(NSSize(width: 800, height: 500))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let textView = controller.editor.textView
+        XCTAssertEqual(controller.editor.scrollView.documentCursor?.image.tiffRepresentation,
+                       NSCursor.arrow.image.tiffRepresentation)
+        XCTAssertTrue(textView.textCursorRects(in: textView.visibleRect).isEmpty)
+
+        textView.string = "A thought"
+        let container = try XCTUnwrap(textView.textContainer)
+        textView.layoutManager?.ensureLayout(for: container)
+        let rect = try XCTUnwrap(textView.textCursorRects(in: textView.visibleRect).first)
+        XCTAssertGreaterThanOrEqual(rect.minX, textView.textContainerInset.width - 1)
+        XCTAssertLessThan(rect.maxX, textView.textContainerInset.width + 100)
+        XCTAssertGreaterThan(rect.minY, textView.visibleRect.minY + 50)
+    }
+
     func testMouseWheelEasesAndSettles() throws {
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             throw XCTSkip("Reduce Motion intentionally disables wheel animation.")

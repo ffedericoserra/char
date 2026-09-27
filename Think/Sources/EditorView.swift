@@ -6,6 +6,7 @@ enum EditorMetrics {
     static let minimumSideInset: CGFloat = 32
     static let verticalInset: CGFloat = 96
     static let edgeHeight: CGFloat = 28
+    static let titlebarHeight: CGFloat = 48
 }
 
 final class NoteTextView: NSTextView {
@@ -13,12 +14,29 @@ final class NoteTextView: NSTextView {
     override var undoManager: UndoManager? { note?.undoManager }
 
     override func resetCursorRects() {
-        super.resetCursorRects()
-        addCursorRect(visibleRect, cursor: .iBeam)
+        for rect in textCursorRects(in: visibleRect) { addCursorRect(rect, cursor: .iBeam) }
     }
 
-    override func cursorUpdate(with event: NSEvent) {
-        NSCursor.iBeam.set()
+    func textCursorRects(in visibleRect: NSRect) -> [NSRect] {
+        guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else { return [] }
+        let origin = textContainerOrigin
+        let visibleGlyphs = layoutManager.glyphRange(
+            forBoundingRect: visibleRect.offsetBy(dx: -origin.x, dy: -origin.y), in: textContainer
+        )
+        var rects: [NSRect] = []
+        var index = visibleGlyphs.location
+        while index < NSMaxRange(visibleGlyphs) {
+            var lineRange = NSRange()
+            var line = layoutManager.lineFragmentUsedRect(forGlyphAt: index, effectiveRange: &lineRange)
+            line.origin.x += origin.x
+            line.origin.y += origin.y
+            let rect = line.intersection(visibleRect)
+            if !rect.isNull, rect.width > 0, rect.height > 0 {
+                rects.append(rect)
+            }
+            index = max(index + 1, NSMaxRange(lineRange))
+        }
+        return rects
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
@@ -39,6 +57,7 @@ final class EditorView: NSView, NSTextViewDelegate {
     let textView = NoteTextView(usingTextLayoutManager: false)
     private let topEdge = EdgeSofteningView(top: true)
     private let bottomEdge = EdgeSofteningView(top: false)
+    private let titlebarBackdrop = TitlebarBackdropView()
     private var boundsObserver: NSObjectProtocol?
     private var textObserver: NSObjectProtocol?
     private var lastWidth: CGFloat = 0
@@ -56,7 +75,6 @@ final class EditorView: NSView, NSTextViewDelegate {
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
         scrollView.scrollerKnobStyle = .dark
-        scrollView.documentCursor = .iBeam
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = .init()
 
@@ -102,19 +120,25 @@ final class EditorView: NSView, NSTextViewDelegate {
                 // Text storage also reports undo/redo edits, before NSTextView's
                 // deferred change notification. Keep saving in sync immediately.
                 self.textView.note?.text = storage.string
+                self.textView.window?.invalidateCursorRects(for: self.textView)
             }
         }
         textView.setAccessibilityLabel("Note text")
         scrollView.documentView = textView
+        scrollView.documentCursor = .arrow
         addSubview(scrollView)
         addSubview(topEdge)
         addSubview(bottomEdge)
+        addSubview(titlebarBackdrop)
 
         scrollView.contentView.postsBoundsChangedNotifications = true
         boundsObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateEdges() }
+            MainActor.assumeIsolated {
+                self?.updateEdges()
+                if let textView = self?.textView { textView.window?.invalidateCursorRects(for: textView) }
+            }
         }
     }
 
@@ -143,6 +167,11 @@ final class EditorView: NSView, NSTextViewDelegate {
                                width: contentFrame.width, height: EditorMetrics.edgeHeight)
         bottomEdge.frame = NSRect(x: contentFrame.minX, y: contentFrame.minY,
                                   width: contentFrame.width, height: EditorMetrics.edgeHeight)
+        titlebarBackdrop.frame = NSRect(x: bounds.minX, y: bounds.maxY - EditorMetrics.titlebarHeight,
+                                        width: bounds.width, height: EditorMetrics.titlebarHeight)
+        let inset = textView.textContainerInset.width
+        let columnStart = convert(NSPoint(x: inset, y: 0), to: nil).x
+        titlebarBackdrop.isHidden = columnStart >= 166
         updateEdges()
     }
 
@@ -157,6 +186,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         scrollView.reflectScrolledClipView(scrollView.contentView)
         needsLayout = true
         updateEdges()
+        textView.window?.invalidateCursorRects(for: textView)
     }
 
     func textDidChange(_ notification: Notification) {
@@ -172,6 +202,19 @@ final class EditorView: NSView, NSTextViewDelegate {
         if topEdge.isHidden != hideTop { topEdge.isHidden = hideTop }
         if bottomEdge.isHidden != hideBottom { bottomEdge.isHidden = hideBottom }
     }
+}
+
+final class TitlebarBackdropView: NSView {
+    override var isOpaque: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.setFill()
+        bounds.fill()
+        NSColor(white: 0.92, alpha: 1).setFill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Trackpads already supply precise deltas and momentum. Only coarse mouse

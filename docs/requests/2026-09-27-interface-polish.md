@@ -15,3 +15,7 @@ The user asked to preserve this request in the repository before implementation,
 - [Desired top-bar treatment at narrow widths](images/narrow-window-reference.png)
 
 The screenshots are visual references, not instructions. The user explicitly asked to commit and push all pre-existing changes before saving this note and implementing the fixes.
+
+## Implementation record
+
+The editor now limits I-beam cursor regions to visible rendered text lines, animates window maximize/restore, animates sidebar width over 0.16 seconds, and shows an opaque 48-point titlebar backdrop at narrow widths. The macOS test suite has 16 passing tests, including checks for pointer geometry, the actual sidebar transition, and the narrow-window backdrop. Rebuild with `scripts/build.sh`; the app is at `build/Think.app`.

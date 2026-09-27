@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 private final class WhiteSplitView: NSSplitView {
     override func drawDivider(in rect: NSRect) { NSColor.white.setFill(); rect.fill() }
@@ -49,10 +50,10 @@ final class NoteWindow: NSWindow {
             && abs(frame.width - visibleFrame.width) < 2 && abs(frame.height - visibleFrame.height) < 2
         if fillsScreen, let previousFrame = frameBeforeMaximize {
             frameBeforeMaximize = nil
-            setFrame(previousFrame, display: true)
+            setFrame(previousFrame, display: true, animate: true)
         } else {
             frameBeforeMaximize = frame
-            setFrame(visibleFrame, display: true)
+            setFrame(visibleFrame, display: true, animate: true)
         }
         alignTitlebarControls()
     }
@@ -76,6 +77,12 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     private let sidebar = FolderBrowser()
     private let splitView = WhiteSplitView()
     private var sidebarVisible = false
+    private var sidebarTransitioning = false
+    private var sidebarDisplayLink: CADisplayLink?
+    private lazy var sidebarAnimationDriver = SidebarAnimationDriver(controller: self)
+    private var sidebarAnimationStart: TimeInterval = 0
+    private var sidebarAnimationFrom: CGFloat = 0
+    private var sidebarAnimationTo: CGFloat = 0
     private var sidebarWidth: CGFloat = 240
     private var pendingURL: URL?
     private var sidebarButton: NSButton!
@@ -135,20 +142,55 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     }
 
     @objc func toggleSidebar(_ sender: Any?) {
+        guard !sidebarTransitioning else { return }
         if sidebarVisible { sidebarWidth = sidebar.frame.width }
         sidebarVisible.toggle()
-        sidebar.isHidden = !sidebarVisible
+        sidebarTransitioning = true
         window?.minSize = NSSize(width: sidebarVisible ? 720 : 480, height: 360)
         if sidebarVisible, let window, window.frame.width < 720 {
             var frame = window.frame
             frame.size.width = 720
-            window.setFrame(frame, display: true)
+            window.setFrame(frame, display: true, animate: true)
         }
-        splitView.adjustSubviews()
-        if sidebarVisible { splitView.setPosition(sidebarWidth, ofDividerAt: 0) }
+        if sidebarVisible {
+            sidebar.isHidden = false
+            splitView.adjustSubviews()
+            splitView.setPosition(0, ofDividerAt: 0)
+        }
+        sidebarAnimationFrom = sidebar.frame.width
+        sidebarAnimationTo = sidebarVisible ? sidebarWidth : 0
+        sidebarAnimationStart = ProcessInfo.processInfo.systemUptime
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            finishSidebarAnimation()
+        } else {
+            let link = splitView.displayLink(target: sidebarAnimationDriver,
+                                              selector: #selector(SidebarAnimationDriver.tick(_:)))
+            sidebarDisplayLink = link
+            link.add(to: .main, forMode: .common)
+        }
         sidebarButton.state = sidebarVisible ? .on : .off
         sidebarButton.toolTip = sidebarVisible ? "Hide Sidebar (⌃⌘S)" : "Show Sidebar (⌃⌘S)"
         window?.makeFirstResponder(editor.textView)
+    }
+
+    fileprivate func advanceSidebarAnimation() {
+        let elapsed = ProcessInfo.processInfo.systemUptime - sidebarAnimationStart
+        let progress = min(1, max(0, elapsed / 0.16))
+        let eased = progress * progress * (3 - 2 * progress)
+        splitView.setPosition(sidebarAnimationFrom + (sidebarAnimationTo - sidebarAnimationFrom) * eased,
+                              ofDividerAt: 0)
+        if progress >= 1 { finishSidebarAnimation() }
+    }
+
+    private func finishSidebarAnimation() {
+        sidebarDisplayLink?.invalidate()
+        sidebarDisplayLink = nil
+        splitView.setPosition(sidebarAnimationTo, ofDividerAt: 0)
+        if !sidebarVisible {
+            sidebar.isHidden = true
+            splitView.adjustSubviews()
+        }
+        sidebarTransitioning = false
     }
 
     @objc func openFolder(_ sender: Any?) {
@@ -231,7 +273,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     }
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat,
-                   ofSubviewAt dividerIndex: Int) -> CGFloat { 180 }
+                   ofSubviewAt dividerIndex: Int) -> CGFloat { sidebarTransitioning ? 0 : 180 }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat,
                    ofSubviewAt dividerIndex: Int) -> CGFloat { min(360, splitView.bounds.width - 400) }
@@ -281,4 +323,14 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     }
 
     @objc private func newNote(_ sender: Any?) { NSDocumentController.shared.newDocument(sender) }
+}
+
+@MainActor
+private final class SidebarAnimationDriver: NSObject {
+    weak var controller: EditorWindowController?
+    init(controller: EditorWindowController) { self.controller = controller }
+    @objc func tick(_ link: CADisplayLink) {
+        guard let controller else { link.invalidate(); return }
+        controller.advanceSidebarAnimation()
+    }
 }
