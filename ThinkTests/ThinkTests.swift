@@ -54,6 +54,116 @@ final class PlainTextTests: XCTestCase {
 
 @MainActor
 final class DocumentTests: XCTestCase {
+    func testSwitchingToShortAndEmptyNotesClearsTheViewport() throws {
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        controller.showWindow(nil)
+        controller.toggleSidebar(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let editor = controller.editor
+        let longNote = NoteDocument()
+        longNote.text = String(repeating: "Previous paragraph that must disappear.\n", count: 200)
+        let originalText = longNote.text
+        let nextNote = NoteDocument()
+
+        for replacement in ["Short note", ""] {
+            editor.display(longNote)
+            editor.scrollView.contentView.scroll(to: NSPoint(x: 0, y: 200))
+            window.displayIfNeeded()
+            nextNote.text = replacement
+            editor.display(nextNote)
+
+            XCTAssertEqual(editor.textView.string, replacement)
+            XCTAssertEqual(longNote.text, originalText)
+            XCTAssertEqual(editor.textView.selectedRange(), NSRange(location: 0, length: 0))
+            XCTAssertEqual(editor.scrollView.contentView.bounds.minY, 0, accuracy: 0.5)
+            XCTAssertEqual(editor.textView.frame.height, editor.scrollView.contentSize.height, accuracy: 1)
+            XCTAssertFalse(nextNote.isDocumentEdited)
+            XCTAssertFalse(nextNote.undoManager?.canUndo ?? false)
+
+            window.makeFirstResponder(nil)
+            window.displayIfNeeded()
+            let textView = editor.textView
+            let bitmap = try XCTUnwrap(textView.bitmapImageRepForCachingDisplay(in: textView.bounds))
+            textView.cacheDisplay(in: textView.bounds, to: bitmap)
+            let scaleX = CGFloat(bitmap.pixelsWide) / textView.bounds.width
+            let scaleY = CGFloat(bitmap.pixelsHigh) / textView.bounds.height
+            let textRects = textView.textCursorRects(in: textView.bounds).map { $0.insetBy(dx: -2, dy: -2) }
+            var stalePixels = 0
+            for y in stride(from: 0, to: bitmap.pixelsHigh, by: 3) {
+                for x in stride(from: 0, to: bitmap.pixelsWide, by: 3) {
+                    let point = NSPoint(x: CGFloat(x) / scaleX, y: CGFloat(y) / scaleY)
+                    guard !textRects.contains(where: { $0.contains(point) }) else { continue }
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                       min(color.redComponent, color.greenComponent, color.blueComponent) < 0.95 {
+                        stalePixels += 1
+                    }
+                }
+            }
+            XCTAssertEqual(stalePixels, 0, "The area outside the new note must be completely white")
+        }
+    }
+
+    func testSavingPreservesSidebarScrollAndExpandedFolder() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let nested = directory.appendingPathComponent("Journal")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for index in 0..<100 {
+            try Data("Note \(index)".utf8).write(to: nested.appendingPathComponent("note\(index).txt"))
+        }
+        let url = nested.appendingPathComponent("note60.txt")
+        let note = try NoteDocument(contentsOf: url, ofType: "public.plain-text")
+        note.makeWindowControllers()
+        defer { note.close() }
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        controller.showWindow(nil)
+        controller.toggleSidebar(nil)
+        let split = try XCTUnwrap(controller.window?.contentView as? NSSplitView)
+        let sidebar = try XCTUnwrap(split.arrangedSubviews.first as? FolderBrowser)
+        let scroll = try XCTUnwrap(sidebar.subviews.first { $0 is NSScrollView } as? NSScrollView)
+        let outline = try XCTUnwrap(scroll.documentView as? NSOutlineView)
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
+        sidebar.setFolder(directory)
+        waitForRows(1, in: outline)
+        let folder = try XCTUnwrap(outline.item(atRow: 0))
+        outline.expandItem(folder)
+        waitForRows(101, in: outline)
+        sidebar.selectFile(url)
+        let selectedRow = outline.selectedRow
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 1400))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let originalY = scroll.contentView.bounds.minY
+        XCTAssertGreaterThan(originalY, 0)
+        var selectionCallbacks = 0
+        sidebar.onSelectFile = { _ in selectionCallbacks += 1 }
+
+        // A newly discovered file proves the asynchronous refresh completed.
+        try Data().write(to: nested.appendingPathComponent("zz-new.txt"))
+        note.text = "Saved change"
+        note.updateChangeCount(.changeDone)
+        let saved = expectation(description: "Note saved")
+        note.save(to: url, ofType: "public.plain-text", for: .saveOperation) { error in
+            XCTAssertNil(error)
+            saved.fulfill()
+        }
+        wait(for: [saved], timeout: 10)
+        waitForRows(102, in: outline)
+        XCTAssertEqual(scroll.contentView.bounds.minY, originalY, accuracy: 1)
+        XCTAssertTrue(outline.isItemExpanded(folder))
+        XCTAssertEqual(outline.selectedRow, selectedRow)
+        XCTAssertEqual(selectionCallbacks, 0)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "Saved change")
+    }
+
+    private func waitForRows(_ count: Int, in outline: NSOutlineView) {
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            MainActor.assumeIsolated { outline.numberOfRows == count }
+        }, object: nil)
+        wait(for: [loaded], timeout: 5)
+    }
+
     func testTitlebarGeometry() throws {
         let controller = EditorWindowController()
         let window = try XCTUnwrap(controller.window as? NoteWindow)
@@ -64,10 +174,10 @@ final class DocumentTests: XCTestCase {
             let nativeButtons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { window.standardWindowButton($0) }
             let controls = nativeButtons + window.noteButtons
             XCTAssertEqual(controls.count, 5)
-            for (button, centerX) in zip(controls, [23.0, 43.0, 63.0, 102.0, 136.0]) {
+            for (index, (button, centerX)) in zip(controls, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
                 let frame = button.convert(button.bounds, to: nil)
                 XCTAssertEqual(frame.midX, centerX, accuracy: 0.5)
-                XCTAssertEqual(window.frame.height - frame.midY, 24, accuracy: 0.5)
+                XCTAssertEqual(window.frame.height - frame.midY, index == 4 ? 23 : 24, accuracy: 0.5)
             }
         }
     }
@@ -84,7 +194,59 @@ final class DocumentTests: XCTestCase {
         XCTAssertEqual(window.frame, original)
     }
 
-    func testSidebarOpensAndClosesAfterTransition() throws {
+    func testTitlebarStaysAlignedWhenSidebarSwitchesDocuments() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let urls = ["Short.txt", "A much longer name for the second note.txt"].map {
+            directory.appendingPathComponent($0)
+        }
+        for url in urls { try Data("A note".utf8).write(to: url) }
+        let first = try NoteDocument(contentsOf: urls[0], ofType: "public.plain-text")
+        NSDocumentController.shared.addDocument(first)
+        first.makeWindowControllers()
+        let controller = try XCTUnwrap(first.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window as? NoteWindow)
+        defer { (controller.document as? NoteDocument)?.close() }
+        controller.showWindow(nil)
+        controller.toggleSidebar(nil)
+        let split = try XCTUnwrap(window.contentView as? NSSplitView)
+        let sidebar = try XCTUnwrap(split.arrangedSubviews.first as? FolderBrowser)
+        sidebar.setFolder(directory)
+        let scroll = try XCTUnwrap(sidebar.subviews.first { $0 is NSScrollView } as? NSScrollView)
+        let outline = try XCTUnwrap(scroll.documentView as? NSOutlineView)
+        waitForRows(2, in: outline)
+
+        for url in [urls[1], urls[0], urls[1]] {
+            sidebar.onSelectFile?(url)
+            let switched = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                MainActor.assumeIsolated {
+                    (controller.document as? NoteDocument)?.fileURL == url
+                }
+            }, object: nil)
+            wait(for: [switched], timeout: 5)
+            XCTAssertTrue(window.firstResponder === outline)
+            XCTAssertGreaterThanOrEqual(outline.selectedRow, 0)
+            XCTAssertEqual(outline.view(atColumn: 0, row: outline.selectedRow,
+                                        makeIfNecessary: false)?.toolTip.map {
+                URL(fileURLWithPath: $0).lastPathComponent
+            }, url.lastPathComponent)
+            window.makeFirstResponder(controller.editor.textView)
+            XCTAssertGreaterThanOrEqual(outline.selectedRow, 0)
+            // Let AppKit finish titlebar layout without a mouse or key event.
+            window.contentView?.superview?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let native = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+                .compactMap { window.standardWindowButton($0) }
+            for (index, (button, x)) in zip(native + window.noteButtons, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
+                let frame = button.convert(button.bounds, to: nil)
+                XCTAssertEqual(frame.midX, x, accuracy: 0.5)
+                XCTAssertEqual(window.frame.height - frame.midY, index == 4 ? 23 : 24, accuracy: 0.5)
+            }
+        }
+    }
+
+    func testSidebarOpensAndClosesImmediately() throws {
         let controller = EditorWindowController()
         let window = try XCTUnwrap(controller.window)
         defer { window.close() }
@@ -95,26 +257,13 @@ final class DocumentTests: XCTestCase {
 
         controller.toggleSidebar(nil)
         XCTAssertFalse(sidebar.isHidden)
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            XCTAssertLessThan(sidebar.frame.width, 240)
-        }
-        let opened = expectation(description: "Sidebar opens")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            XCTAssertEqual(sidebar.frame.width, 240, accuracy: 2)
-            opened.fulfill()
-        }
-        wait(for: [opened], timeout: 1)
+        XCTAssertEqual(sidebar.frame.width, 240, accuracy: 2)
+        let scroll = try XCTUnwrap(sidebar.subviews.first { $0 is NSScrollView } as? NSScrollView)
+        XCTAssertTrue(scroll is SmoothScrollView)
+        XCTAssertEqual(scroll.scrollerStyle, .overlay)
 
         controller.toggleSidebar(nil)
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            XCTAssertGreaterThan(sidebar.frame.width, 0)
-        }
-        let closed = expectation(description: "Sidebar closes")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            XCTAssertTrue(sidebar.isHidden)
-            closed.fulfill()
-        }
-        wait(for: [closed], timeout: 1)
+        XCTAssertTrue(sidebar.isHidden)
     }
 
     func testNarrowWindowProtectsTitlebar() throws {
@@ -130,6 +279,78 @@ final class DocumentTests: XCTestCase {
         window.setContentSize(NSSize(width: 1280, height: 800))
         window.contentView?.layoutSubtreeIfNeeded()
         XCTAssertTrue(backdrop.isHidden)
+    }
+
+    func testCommandBTogglesSidebarWhileEditing() throws {
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        controller.showWindow(nil)
+        let split = try XCTUnwrap(window.contentView as? NSSplitView)
+        let sidebar = try XCTUnwrap(split.arrangedSubviews.first)
+        let textView = controller.editor.textView
+        textView.string = "Keep this text"
+        textView.setSelectedRange(NSRange(location: 0, length: 4))
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, characters: "b", charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11
+        ))
+
+        XCTAssertTrue(window.firstResponder === textView)
+        XCTAssertTrue(window.performKeyEquivalent(with: event))
+        XCTAssertFalse(sidebar.isHidden)
+        let scroll = try XCTUnwrap(sidebar.subviews.first { $0 is NSScrollView } as? NSScrollView)
+        window.makeFirstResponder(scroll.documentView)
+        XCTAssertTrue(window.performKeyEquivalent(with: event))
+        XCTAssertTrue(sidebar.isHidden)
+        XCTAssertEqual(textView.string, "Keep this text")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 4))
+    }
+
+    func testCursorUpdatesUseArrowOutsideText() throws {
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close(); NSCursor.arrow.set() }
+        controller.showWindow(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let textView = controller.editor.textView
+        textView.string = "A thought"
+        textView.layoutManager?.ensureLayout(for: try XCTUnwrap(textView.textContainer))
+        let textRect = try XCTUnwrap(textView.textCursorRects(in: textView.visibleRect).first)
+
+        for (point, cursor) in [
+            (NSPoint(x: textRect.midX, y: textRect.midY), NSCursor.iBeam),
+            (NSPoint(x: 10, y: textRect.midY), NSCursor.arrow),
+            (NSPoint(x: textRect.maxX + 40, y: textRect.midY), NSCursor.arrow),
+            (NSPoint(x: textRect.midX, y: textRect.maxY + 40), NSCursor.arrow)
+        ] {
+            let event = try XCTUnwrap(NSEvent.enterExitEvent(
+                with: .cursorUpdate, location: textView.convert(point, to: nil), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
+            ))
+            textView.cursorUpdate(with: event)
+            XCTAssertEqual(NSCursor.current.image.tiffRepresentation, cursor.image.tiffRepresentation, "Pointer at \(point)")
+            let moved = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .mouseMoved, location: event.locationInWindow, modifierFlags: [],
+                timestamp: event.timestamp, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 0, pressure: 0
+            ))
+            textView.mouseMoved(with: moved)
+            XCTAssertEqual(NSCursor.current.image.tiffRepresentation, cursor.image.tiffRepresentation, "Moving at \(point)")
+        }
+
+        controller.toggleSidebar(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        NSCursor.resizeLeftRight.set()
+        let outside = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .mouseMoved, location: NSPoint(x: 240, y: 200), modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+        ))
+        textView.mouseMoved(with: outside)
+        XCTAssertEqual(NSCursor.current.image.tiffRepresentation, NSCursor.resizeLeftRight.image.tiffRepresentation)
     }
 
     func testTextPointerIsLimitedToRenderedText() throws {
@@ -151,6 +372,16 @@ final class DocumentTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rect.minX, textView.textContainerInset.width - 1)
         XCTAssertLessThan(rect.maxX, textView.textContainerInset.width + 100)
         XCTAssertGreaterThan(rect.minY, textView.visibleRect.minY + 50)
+
+        textView.string = String(repeating: "A thought\n", count: 100)
+        textView.layoutManager?.ensureLayout(for: container)
+        textView.sizeToFit()
+        controller.editor.scrollView.contentView.scroll(to: NSPoint(x: 0, y: 100))
+        let scrolledRects = textView.textCursorRects(in: textView.visibleRect)
+        XCTAssertFalse(scrolledRects.isEmpty)
+        for rect in scrolledRects {
+            XCTAssertTrue(window.contentLayoutRect.contains(textView.convert(rect, to: nil)))
+        }
     }
 
     func testMouseWheelEasesAndSettles() throws {
@@ -190,6 +421,31 @@ final class DocumentTests: XCTestCase {
         XCTAssertFalse(controller.editor.textView.isRichText)
         XCTAssertTrue(controller.editor.textView.undoManager === note.undoManager)
         XCTAssertFalse(NoteDocument.autosavesInPlace)
+    }
+
+    func testFontSizeChangesStayInSessionWithoutEditingNote() throws {
+        let originalSize = EditorSession.fontSize
+        defer { EditorSession.fontSize = originalSize }
+        let note = NoteDocument()
+        note.text = "A thought"
+        note.makeWindowControllers()
+        defer { note.close() }
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+
+        controller.increaseFontSize(nil)
+        XCTAssertEqual(EditorSession.fontSize, originalSize + 1)
+        XCTAssertEqual(controller.editor.textView.font?.pointSize, originalSize + 1)
+        XCTAssertEqual(note.text, "A thought")
+        XCTAssertFalse(note.isDocumentEdited)
+
+        let secondNote = NoteDocument()
+        secondNote.makeWindowControllers()
+        defer { secondNote.close() }
+        let secondEditor = try XCTUnwrap((secondNote.windowControllers.first as? EditorWindowController)?.editor)
+        XCTAssertEqual(secondEditor.textView.font?.pointSize, originalSize + 1)
+
+        controller.decreaseFontSize(nil)
+        XCTAssertEqual(controller.editor.textView.font?.pointSize, originalSize)
     }
 
     func testEditingUndoRedoAndDirtyState() throws {

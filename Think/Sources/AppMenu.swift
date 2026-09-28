@@ -42,7 +42,9 @@ enum AppMenu {
         find.tag = NSTextFinder.Action.showFindInterface.rawValue
 
         let view = submenu("View", in: main)
-        item("Toggle Sidebar", #selector(EditorWindowController.toggleSidebar(_:)), key: "s", modifiers: [.command, .control], in: view)
+        item("Toggle Sidebar", #selector(EditorWindowController.toggleSidebar(_:)), key: "b", in: view)
+        item("Increase Font Size", #selector(EditorWindowController.increaseFontSize(_:)), key: "+", in: view)
+        item("Decrease Font Size", #selector(EditorWindowController.decreaseFontSize(_:)), key: "-", in: view)
         item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), key: "f", modifiers: [.command, .control], in: view)
 
         let window = submenu("Window", in: main)
@@ -70,4 +72,3 @@ enum AppMenu {
         return entry
     }
 }
-

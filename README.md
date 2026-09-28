@@ -26,7 +26,8 @@ Launching Think opens a blank note with the cursor ready. Each new note has its 
 | Open a folder | ⇧⌘O |
 | Save | ⌘S |
 | Save As | ⇧⌘S |
-| Show or hide sidebar | ⌃⌘S |
+| Show or hide sidebar | ⌘B |
+| Increase / decrease font size | ⌘+ / ⌘− |
 | Find | ⌘F |
 | Undo / redo | ⌘Z / ⇧⌘Z |
 | Close window | ⌘W |
@@ -46,9 +47,9 @@ Selecting a sidebar file reuses the current window after resolving unsaved chang
 
 ## Appearance
 
-The writing surface stays white in both system appearances. The font is the macOS system font, regular, 14 pt. Text wraps in a centered column, up to 720 pt wide, with a 96 pt initial top inset and at least 32 pt side margins. The top inset scrolls away with the content.
+The writing surface stays white in both system appearances. The font is the macOS system font, regular, 14 pt by default. Font size changes apply to open and new windows until the app quits; they are not saved. Text wraps in a centered column, up to 720 pt wide, with a 96 pt initial top inset and at least 32 pt side margins. The top inset scrolls away with the content.
 
-Trackpad scrolling and momentum remain native. Discrete mouse-wheel steps ease into place in sync with the display's refresh rate; the animation respects Reduce Motion and yields to direct navigation. A slim native overlay scrollbar appears over the white page without reserving a right-hand gutter. The writing area uses the macOS I-beam pointer. Narrow top and bottom overlays combine an AppKit backdrop blur with a gradient into white, without intercepting selection or scrolling.
+Trackpad scrolling and momentum remain native. Discrete mouse-wheel steps ease into place in sync with the display's refresh rate; the animation respects Reduce Motion and yields to direct navigation. A slim native overlay scrollbar appears over the white page without reserving a right-hand gutter. The macOS I-beam pointer appears only over note text; blank space uses the arrow pointer. Narrow top and bottom overlays combine an AppKit backdrop blur with a gradient into white, without intercepting selection or scrolling.
 
 The window controls and note buttons share a center line 24 pt below the top edge. Double-click the empty top bar to maximize the window, and double-click again to restore it. The caret stays 1 pt wide and the same height on empty and populated lines.
 

@@ -2,6 +2,9 @@ import AppKit
 import QuartzCore
 
 enum EditorMetrics {
+    static let defaultFontSize: CGFloat = 14
+    static let minimumFontSize: CGFloat = 8
+    static let maximumFontSize: CGFloat = 36
     static let columnWidth: CGFloat = 720
     static let minimumSideInset: CGFloat = 32
     static let verticalInset: CGFloat = 96
@@ -9,16 +12,57 @@ enum EditorMetrics {
     static let titlebarHeight: CGFloat = 48
 }
 
+@MainActor
+enum EditorSession {
+    static var fontSize = EditorMetrics.defaultFontSize
+}
+
 final class NoteTextView: NSTextView {
     weak var note: NoteDocument?
+    private var pointerTrackingArea: NSTrackingArea?
     override var undoManager: UndoManager? { note?.undoManager }
 
     override func resetCursorRects() {
+        addCursorRect(visibleRect, cursor: .arrow)
         for rect in textCursorRects(in: visibleRect) { addCursorRect(rect, cursor: .iBeam) }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        pointerTrackingArea = area
+    }
+
+    override func cursorUpdate(with event: NSEvent) { updatePointer(with: event) }
+
+    override func mouseMoved(with event: NSEvent) {
+        // NSTextView's implementation sets an I-beam independently of its
+        // cursor rectangles, including mouse events outside the text itself.
+        updatePointer(with: event)
+    }
+
+    private func updatePointer(with event: NSEvent) {
+        guard let window, window.contentLayoutRect.contains(event.locationInWindow),
+              let contentView = window.contentView else { return }
+        let hit = contentView.hitTest(contentView.convert(event.locationInWindow, from: nil))
+        // AppKit can hit the clip view in the text container's side margins.
+        // Other views (especially the split divider) keep their native cursor.
+        guard hit === self || hit === enclosingScrollView?.contentView else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let overText = textCursorRects(in: visibleRect).contains { $0.contains(point) }
+        (overText ? NSCursor.iBeam : NSCursor.arrow).set()
     }
 
     func textCursorRects(in visibleRect: NSRect) -> [NSRect] {
         guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else { return [] }
+        // Full-size content extends behind the titlebar; scrolled text there
+        // must not give the window controls an I-beam pointer.
+        let visibleRect = window.map { visibleRect.intersection(convert($0.contentLayoutRect, from: nil)) } ?? visibleRect
+        guard !visibleRect.isEmpty else { return [] }
         let origin = textContainerOrigin
         let visibleGlyphs = layoutManager.glyphRange(
             forBoundingRect: visibleRect.offsetBy(dx: -origin.x, dy: -origin.y), in: textContainer
@@ -42,7 +86,7 @@ final class NoteTextView: NSTextView {
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         // The line fragment includes paragraph spacing (and a taller empty-line
         // fragment). The caret should only use the regular font's height.
-        let font = NSFont.systemFont(ofSize: 14, weight: .regular)
+        let font = self.font ?? NSFont.systemFont(ofSize: EditorMetrics.defaultFontSize, weight: .regular)
         var caret = rect
         caret.size = NSSize(width: 1, height: ceil(font.ascender - font.descender))
         caret.origin.x = round(caret.origin.x * (window?.backingScaleFactor ?? 2)) / (window?.backingScaleFactor ?? 2)
@@ -51,7 +95,8 @@ final class NoteTextView: NSTextView {
 }
 
 final class EditorView: NSView, NSTextViewDelegate {
-    let scrollView = NoteScrollView()
+    private(set) var fontSize = EditorSession.fontSize
+    let scrollView = SmoothScrollView()
     // TextKit 1 exposes AppKit's custom caret drawing while retaining native
     // selection, input methods, undo, and plain-text layout.
     let textView = NoteTextView(usingTextLayoutManager: false)
@@ -90,7 +135,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.lineFragmentPadding = 0
-        textView.font = .systemFont(ofSize: 14, weight: .regular)
+        textView.font = .systemFont(ofSize: fontSize, weight: .regular)
         textView.textColor = NSColor(white: 0.22, alpha: 1)
         textView.insertionPointColor = .textColor
         textView.backgroundColor = .white
@@ -108,7 +153,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 5
         textView.defaultParagraphStyle = paragraph
-        textView.typingAttributes = [.font: NSFont.systemFont(ofSize: 14), .paragraphStyle: paragraph,
+        textView.typingAttributes = [.font: NSFont.systemFont(ofSize: fontSize), .paragraphStyle: paragraph,
                                      .foregroundColor: NSColor(white: 0.22, alpha: 1)]
         textView.delegate = self
         textObserver = NotificationCenter.default.addObserver(
@@ -149,6 +194,24 @@ final class EditorView: NSView, NSTextViewDelegate {
         if let textObserver { NotificationCenter.default.removeObserver(textObserver) }
     }
 
+    func setFontSize(_ size: CGFloat) {
+        guard fontSize != size else { return }
+        fontSize = size
+        applyFontSize()
+    }
+
+    private func applyFontSize() {
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .regular)
+        textView.font = font
+        var attributes = textView.typingAttributes
+        attributes[.font] = font
+        textView.typingAttributes = attributes
+        textView.sizeToFit()
+        needsLayout = true
+        updateEdges()
+        textView.window?.invalidateCursorRects(for: textView)
+    }
+
     override func layout() {
         super.layout()
         scrollView.frame = bounds
@@ -182,9 +245,22 @@ final class EditorView: NSView, NSTextViewDelegate {
         textView.string = note.text
         textView.note = note
         textView.setSelectedRange(NSRange(location: 0, length: 0))
+        applyFontSize()
+        if let container = textView.textContainer {
+            textView.layoutManager?.ensureLayout(for: container)
+        }
+        textView.sizeToFit()
+        needsLayout = true
+        layoutSubtreeIfNeeded()
         scrollView.contentView.scroll(to: .zero)
         scrollView.reflectScrolledClipView(scrollView.contentView)
-        needsLayout = true
+        // Replacing a note can shrink and scroll the text view in the same
+        // update. Repaint the entire viewport, including the now-empty area,
+        // instead of retaining pixels from the previous note's backing store.
+        textView.needsDisplay = true
+        scrollView.contentView.needsDisplay = true
+        scrollView.needsDisplay = true
+        needsDisplay = true
         updateEdges()
         textView.window?.invalidateCursorRects(for: textView)
     }
@@ -219,8 +295,8 @@ final class TitlebarBackdropView: NSView {
 
 /// Trackpads already supply precise deltas and momentum. Only coarse mouse
 /// wheel events need interpolation between their otherwise abrupt jumps.
-final class NoteScrollView: NSScrollView {
-    // Keep the thumb over the white page, even when macOS prefers legacy
+final class SmoothScrollView: NSScrollView {
+    // Keep the thumb over the content, even when macOS prefers legacy
     // scrollers for a connected mouse. No reserved track or right-hand gutter.
     override var scrollerStyle: NSScroller.Style {
         get { super.scrollerStyle }
@@ -313,8 +389,8 @@ final class NoteScrollView: NSScrollView {
 
 @MainActor
 private final class WheelAnimationDriver: NSObject {
-    weak var scrollView: NoteScrollView?
-    init(scrollView: NoteScrollView) { self.scrollView = scrollView }
+    weak var scrollView: SmoothScrollView?
+    init(scrollView: SmoothScrollView) { self.scrollView = scrollView }
     @objc func tick(_ link: CADisplayLink) {
         guard let scrollView else { link.invalidate(); return }
         scrollView.advanceWheelAnimation()

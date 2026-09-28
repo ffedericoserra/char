@@ -33,11 +33,12 @@ private final class FolderNode {
 }
 
 final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
+    private let backgroundColor = NSColor(calibratedWhite: 0.965, alpha: 1)
     var onSelectFile: ((URL) -> Void)?
     var onOpenFolder: (() -> Void)?
     private(set) var folderURL: URL?
     private let outline = NSOutlineView()
-    private let scroll = NSScrollView()
+    private let scroll = SmoothScrollView()
     private let title = NSTextField(labelWithString: "Folder")
     private let message = NSTextField(wrappingLabelWithString: "Open a folder to browse your notes.")
     private let openButton = NSButton(title: "Open Folder…", target: nil, action: nil)
@@ -50,7 +51,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.white.cgColor
+        layer?.backgroundColor = backgroundColor.cgColor
 
         title.font = .systemFont(ofSize: 12, weight: .medium)
         title.textColor = .secondaryLabelColor
@@ -72,7 +73,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         outline.intercellSpacing = NSSize(width: 0, height: 2)
         outline.indentationPerLevel = 14
         outline.style = .sourceList
-        outline.backgroundColor = .white
+        outline.backgroundColor = backgroundColor
         outline.selectionHighlightStyle = .regular
         outline.focusRingType = .none
         outline.dataSource = self
@@ -80,9 +81,12 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         outline.setAccessibilityLabel("Notes in folder")
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.scrollerKnobStyle = .dark
         scroll.borderType = .noBorder
-        scroll.backgroundColor = .white
+        scroll.backgroundColor = backgroundColor
         scroll.drawsBackground = true
         scroll.automaticallyAdjustsContentInsets = false
         [scroll, title, message, openButton].forEach(addSubview)
@@ -97,7 +101,8 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         scroll.frame = NSRect(x: 8, y: 46, width: bounds.width - 16, height: max(0, bounds.height - 128))
         message.frame = NSRect(x: 24, y: bounds.height - 145, width: bounds.width - 48, height: 50)
         openButton.sizeToFit()
-        openButton.setFrameOrigin(NSPoint(x: 20, y: 14))
+        openButton.setFrameOrigin(NSPoint(x: (bounds.width - openButton.frame.width) / 2,
+                                          y: message.frame.minY - openButton.frame.height - 8))
     }
 
     @objc private func chooseFolder() { onOpenFolder?() }
@@ -107,22 +112,35 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         title.stringValue = url.lastPathComponent
         title.toolTip = url.path
         expandedURLs.removeAll()
+        generation = UUID()
+        root = FolderNode(FolderEntry(url: url, isDirectory: true))
+        updatingSelection = true
+        outline.reloadData()
+        updatingSelection = false
         reload()
+        updateEmptyState()
     }
 
     func reload() {
-        guard let folderURL else { return }
-        generation = UUID()
-        let node = FolderNode(FolderEntry(url: folderURL, isDirectory: true))
-        root = node
-        outline.reloadData()
-        load(node)
-        updateEmptyState()
+        guard let root else { return }
+        // Keep the visible tree alive while reading disk. Emptying it first
+        // collapses the document height and forces the clip view to the top.
+        load(root, refresh: true)
     }
 
     func selectFile(_ url: URL?) {
         selectedURL = url?.standardizedFileURL
         restoreSelection()
+    }
+
+    func focusSelection() {
+        window?.makeFirstResponder(outline)
+    }
+
+    func resignFocusIfClickedOutsideRows(at point: NSPoint) {
+        guard window?.firstResponder === outline,
+              outline.row(at: outline.convert(point, from: nil)) < 0 else { return }
+        window?.makeFirstResponder(nil)
     }
 
     private func restoreSelection() {
@@ -135,8 +153,8 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         else { outline.deselectAll(nil) }
     }
 
-    private func load(_ node: FolderNode) {
-        guard node.entry.isDirectory, node.children == nil, !node.loading else { return }
+    private func load(_ node: FolderNode, refresh: Bool = false) {
+        guard node.entry.isDirectory, (refresh || node.children == nil), !node.loading else { return }
         node.loading = true
         let currentGeneration = generation
         let url = node.entry.url
@@ -147,25 +165,38 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
             guard let self, let node, self.generation == currentGeneration else { return }
             node.loading = false
             switch result {
-            case .success(let entries): node.children = entries.map(FolderNode.init)
+            case .success(let entries):
+                let existing = Dictionary(uniqueKeysWithValues: (node.children ?? []).map { ($0.entry.url, $0) })
+                node.children = entries.map { entry in
+                    if let child = existing[entry.url], child.entry.isDirectory == entry.isDirectory {
+                        return child
+                    }
+                    return FolderNode(entry)
+                }
             case .failure(let error):
                 node.children = []
                 NSApp.presentError(error)
             }
+            let scrollOrigin = self.scroll.contentView.bounds.origin
             self.updatingSelection = true
             if node === self.root { self.outline.reloadData() }
             else { self.outline.reloadItem(node, reloadChildren: true) }
             for child in node.children ?? [] where self.expandedURLs.contains(child.entry.url) {
                 self.outline.expandItem(child)
+                if refresh { self.load(child, refresh: true) }
             }
             self.updatingSelection = false
             self.restoreSelection()
+            self.outline.layoutSubtreeIfNeeded()
+            self.scroll.contentView.scroll(to: scrollOrigin)
+            self.scroll.reflectScrolledClipView(self.scroll.contentView)
             self.updateEmptyState()
         }
     }
 
     private func updateEmptyState() {
         message.isHidden = !(root?.children?.isEmpty ?? true)
+        openButton.isHidden = folderURL != nil
         if folderURL == nil { message.stringValue = "Open a folder to browse your notes." }
         else if root?.children == nil { message.stringValue = "Opening folder…" }
         else { message.stringValue = "No text files in this folder yet." }
@@ -222,7 +253,9 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     func outlineViewItemDidExpand(_ notification: Notification) {
         guard let node = notification.userInfo?["NSObject"] as? FolderNode else { return }
         expandedURLs.insert(node.entry.url)
-        load(node)
+        // Collapsed folders retain their nodes during a refresh; check disk
+        // again when opened so their cached children do not become stale.
+        load(node, refresh: true)
     }
 
     func outlineViewItemDidCollapse(_ notification: Notification) {
@@ -230,4 +263,3 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         expandedURLs.remove(node.entry.url)
     }
 }
-
