@@ -19,7 +19,9 @@ enum AppMenu {
         item("Quit Think", #selector(NSApplication.terminate(_:)), key: "q", in: app)
 
         let file = submenu("File", in: main)
-        item("New Note", #selector(NSDocumentController.newDocument(_:)), key: "n", in: file)
+        let newNote = item("New Note", #selector(AppDelegate.newNote(_:)), key: "n", in: file)
+        newNote.target = NSApp.delegate
+        item("New Window", #selector(NSDocumentController.newDocument(_:)), key: "n", modifiers: [.command, .shift], in: file)
         item("Open…", #selector(NSDocumentController.openDocument(_:)), key: "o", in: file)
         let folder = item("Open Folder…", #selector(AppDelegate.openFolder(_:)), key: "o", modifiers: [.command, .shift], in: file)
         folder.target = NSApp.delegate

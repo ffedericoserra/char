@@ -28,5 +28,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (NSApp.keyWindow?.windowController as? EditorWindowController)?.openFolder(sender)
         }
     }
-}
 
+    @objc func newNote(_ sender: Any?) {
+        if let controller = NSApp.keyWindow?.windowController as? EditorWindowController {
+            controller.newNote(sender)
+        } else {
+            documentController.newDocument(sender)
+        }
+    }
+}

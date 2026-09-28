@@ -54,6 +54,210 @@ final class PlainTextTests: XCTestCase {
 
 @MainActor
 final class DocumentTests: XCTestCase {
+    func testSidebarTogglePreservesEditorScrollPosition() throws {
+        let note = NoteDocument()
+        note.text = String(repeating: "A line of text that stays visible while toggling the sidebar.\n", count: 300)
+        note.makeWindowControllers()
+        defer { note.close() }
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        controller.showWindow(nil)
+        window.setContentSize(NSSize(width: 1280, height: 800))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let editor = controller.editor
+        for position: CGFloat in [0, 500, 1500] {
+            editor.restoreScrollPosition(NSPoint(x: 0, y: position))
+            for _ in 0..<6 {
+                controller.toggleSidebar(nil)
+                window.displayIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+                XCTAssertEqual(editor.scrollView.contentView.bounds.minY, position, accuracy: 1)
+            }
+        }
+    }
+
+    func testDeletingOpenNoteReplacesItWithCleanNoteAndKeepsFolder() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("delete-test.txt")
+        try Data("Saved text".utf8).write(to: url)
+        let note = try NoteDocument(contentsOf: url, ofType: "public.plain-text")
+        NSDocumentController.shared.addDocument(note)
+        note.makeWindowControllers()
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        defer { (controller.document as? NSDocument)?.close() }
+        let split = try XCTUnwrap(window.contentView as? NSSplitView)
+        let sidebar = try XCTUnwrap(split.arrangedSubviews.first as? FolderBrowser)
+        sidebar.setFolder(directory)
+        controller.toggleSidebar(nil)
+        let undo = try XCTUnwrap(note.undoManager)
+        undo.groupsByEvent = false
+        undo.beginUndoGrouping()
+        controller.editor.textView.insertText("Pending edits", replacementRange: NSRange(location: 0, length: 0))
+        controller.editor.textView.breakUndoCoalescing()
+        undo.endUndoGrouping()
+        XCTAssertTrue(note.isDocumentEdited)
+
+        let trashedURL = try NoteFileOperations.trash(url)
+        defer { if let trashedURL { try? FileManager.default.removeItem(at: trashedURL) } }
+        let replacement = try XCTUnwrap(controller.document as? NoteDocument)
+        XCTAssertFalse(replacement === note)
+        XCTAssertTrue(controller.window === window)
+        XCTAssertEqual(controller.folderURL, directory)
+        XCTAssertFalse(sidebar.isHidden)
+        XCTAssertEqual(controller.editor.textView.string, "")
+        XCTAssertEqual(replacement.text, "")
+        XCTAssertNil(replacement.fileURL)
+        XCTAssertFalse(replacement.isDocumentEdited)
+        XCTAssertFalse(replacement.undoManager?.canUndo ?? false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testFileCopyAvoidsOverwriteAndMovePreservesOpenEdits() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destination = directory.appendingPathComponent("Destination")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = directory.appendingPathComponent("note.txt")
+        try Data("Saved text".utf8).write(to: original)
+        let firstCopy = try NoteFileOperations.copy(original, into: directory)
+        let secondCopy = try NoteFileOperations.copy(original, into: directory)
+        XCTAssertEqual(firstCopy.lastPathComponent, "note copy.txt")
+        XCTAssertEqual(secondCopy.lastPathComponent, "note copy 2.txt")
+        XCTAssertEqual(try String(contentsOf: firstCopy, encoding: .utf8), "Saved text")
+        XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "Saved text")
+
+        let note = try NoteDocument(contentsOf: original, ofType: "public.plain-text")
+        NSDocumentController.shared.addDocument(note)
+        defer { NSDocumentController.shared.removeDocument(note) }
+        note.text = "Unsaved edits"
+        note.updateChangeCount(.changeDone)
+        XCTAssertThrowsError(try NoteFileOperations.move(original, to: firstCopy))
+        let moved = try NoteFileOperations.move(original, to: destination.appendingPathComponent("note.txt"))
+        XCTAssertEqual(note.fileURL, moved)
+        XCTAssertEqual(note.text, "Unsaved edits")
+        XCTAssertTrue(note.isDocumentEdited)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: original.path))
+        XCTAssertEqual(try String(contentsOf: moved, encoding: .utf8), "Saved text")
+    }
+
+    func testNewNoteReusesWindowAndClearsDocumentState() throws {
+        let note = NoteDocument()
+        NSDocumentController.shared.addDocument(note)
+        note.makeWindowControllers()
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        controller.showWindow(nil)
+        defer { (controller.document as? NSDocument)?.close() }
+
+        controller.newNote(nil)
+        let replaced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            MainActor.assumeIsolated { controller.document !== note }
+        }, object: nil)
+        wait(for: [replaced], timeout: 3)
+        let replacement = try XCTUnwrap(controller.document as? NoteDocument)
+        XCTAssertTrue(controller.window === window)
+        XCTAssertTrue(replacement.windowControllers.first === controller)
+        XCTAssertTrue(note.windowControllers.isEmpty)
+        XCTAssertNil(replacement.fileURL)
+        XCTAssertEqual(controller.editor.textView.string, "")
+        XCTAssertFalse(replacement.isDocumentEdited)
+        XCTAssertFalse(replacement.undoManager?.canUndo ?? false)
+    }
+
+    func testFirstSaveShowsContainingFolderAndPreservesAncestorRoot() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = directory.appendingPathComponent("Notes")
+        let nested = root.appendingPathComponent("Journal/September")
+        let sibling = directory.appendingPathComponent("Notes-other")
+        for folder in [nested, sibling] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for (index, initialRoot, target, expectedRoot) in [
+            (0, nil as URL?, nested, nested),
+            (1, root, nested, root),
+            (2, root, sibling, sibling)
+        ] {
+            let note = NoteDocument()
+            note.makeWindowControllers()
+            let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+            defer { note.close() }
+            let split = try XCTUnwrap(controller.window?.contentView as? NSSplitView)
+            let sidebar = try XCTUnwrap(split.arrangedSubviews.first as? FolderBrowser)
+            if let initialRoot { sidebar.setFolder(initialRoot) }
+            note.text = "First save"
+            let saved = expectation(description: "Saved new note \(index)")
+            note.save(to: target.appendingPathComponent("note\(index).txt"), ofType: "public.plain-text", for: .saveOperation) { error in
+                XCTAssertNil(error)
+                saved.fulfill()
+            }
+            wait(for: [saved], timeout: 10)
+            XCTAssertEqual(controller.folderURL?.standardizedFileURL, expectedRoot.standardizedFileURL)
+            XCTAssertFalse(sidebar.isHidden)
+        }
+    }
+
+    func testInlineRenameCommitsAndEscapeCancels() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let field = InlineFilenameField(labelWithString: "original.txt")
+        field.frame = NSRect(x: 20, y: 50, width: 200, height: 24)
+        window.contentView?.addSubview(field)
+        window.makeKeyAndOrderFront(nil)
+        var committedNames: [String] = []
+        field.onCommit = { committedNames.append($0); return true }
+        field.beginRename()
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 8))
+        editor.string = "renamed.txt"
+        XCTAssertTrue(field.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertEqual(committedNames, ["renamed.txt"])
+        XCTAssertEqual(field.stringValue, "renamed.txt")
+        XCTAssertFalse(field.isRenaming)
+
+        field.beginRename()
+        let secondEditor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        secondEditor.string = "discard.txt"
+        XCTAssertTrue(field.control(field, textView: secondEditor, doCommandBy: #selector(NSResponder.cancelOperation(_:))))
+        XCTAssertEqual(committedNames, ["renamed.txt"])
+        XCTAssertEqual(field.stringValue, "renamed.txt")
+        XCTAssertFalse(field.isEditable)
+    }
+
+    func testRenamePreservesOpenDocumentEditsAndRejectsCollisions() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = directory.appendingPathComponent("original.txt")
+        let existing = directory.appendingPathComponent("existing.txt")
+        try Data("Saved text".utf8).write(to: original)
+        try Data("Other note".utf8).write(to: existing)
+        let note = try NoteDocument(contentsOf: original, ofType: "public.plain-text")
+        NSDocumentController.shared.addDocument(note)
+        defer { NSDocumentController.shared.removeDocument(note) }
+        note.text = "Pending edits"
+        note.updateChangeCount(.changeDone)
+
+        XCTAssertThrowsError(try NoteFileOperations.rename(original, to: "existing.txt"))
+        XCTAssertThrowsError(try NoteFileOperations.rename(original, to: "../outside.txt"))
+        XCTAssertThrowsError(try NoteFileOperations.rename(original, to: ""))
+        XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "Other note")
+        XCTAssertEqual(note.fileURL, original)
+
+        let renamed = try NoteFileOperations.rename(original, to: "Renamed ☕️")
+        XCTAssertEqual(renamed.lastPathComponent, "Renamed ☕️.txt")
+        XCTAssertEqual(note.fileURL, renamed)
+        XCTAssertEqual(note.text, "Pending edits")
+        XCTAssertTrue(note.isDocumentEdited)
+        XCTAssertEqual(try String(contentsOf: renamed, encoding: .utf8), "Saved text")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: original.path))
+    }
+
     func testSwitchingToShortAndEmptyNotesClearsTheViewport() throws {
         let controller = EditorWindowController()
         let window = try XCTUnwrap(controller.window)
@@ -162,6 +366,50 @@ final class DocumentTests: XCTestCase {
             MainActor.assumeIsolated { outline.numberOfRows == count }
         }, object: nil)
         wait(for: [loaded], timeout: 5)
+    }
+
+    func testFolderExpansionSettlesAndKeepsSiblingRowsVisible() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let journal = directory.appendingPathComponent("Journal")
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for name in ["one.txt", "two.txt", "three.txt"] {
+            try Data().write(to: journal.appendingPathComponent(name))
+        }
+        try Data().write(to: directory.appendingPathComponent("sibling.txt"))
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        controller.showWindow(nil)
+        controller.toggleSidebar(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let split = try XCTUnwrap(window.contentView as? NSSplitView)
+        let sidebar = try XCTUnwrap(split.arrangedSubviews.first as? FolderBrowser)
+        let scroll = try XCTUnwrap(sidebar.subviews.first { $0 is NSScrollView } as? NSScrollView)
+        let outline = try XCTUnwrap(scroll.documentView as? NSOutlineView)
+        sidebar.setFolder(directory)
+        waitForRows(2, in: outline)
+        let folder = try XCTUnwrap(outline.item(atRow: 0))
+        var expansionCount = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSOutlineView.itemDidExpandNotification, object: outline, queue: .main
+        ) { _ in MainActor.assumeIsolated { expansionCount += 1 } }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        outline.animator().expandItem(folder)
+        waitForRows(5, in: outline)
+        let settled = expectation(description: "Expansion finishes without repeated reloads")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+        XCTAssertLessThanOrEqual(expansionCount, 2, "Loading must not repeatedly restart expansion")
+        XCTAssertTrue(outline.isItemExpanded(folder))
+        XCTAssertEqual(outline.numberOfRows, 5)
+        window.displayIfNeeded()
+        for row in 0..<5 {
+            let view = try XCTUnwrap(outline.rowView(atRow: row, makeIfNecessary: true))
+            XCTAssertEqual(view.frame.minY, outline.rect(ofRow: row).minY, accuracy: 1)
+            XCTAssertEqual(view.frame.height, outline.rowHeight, accuracy: 1)
+        }
     }
 
     func testTitlebarGeometry() throws {
@@ -277,6 +525,9 @@ final class DocumentTests: XCTestCase {
         XCTAssertEqual(backdrop.frame.height, EditorMetrics.titlebarHeight)
 
         window.setContentSize(NSSize(width: 1280, height: 800))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertFalse(backdrop.isHidden, "The backdrop now protects the maximum filename width too")
+        window.setContentSize(NSSize(width: 1600, height: 800))
         window.contentView?.layoutSubtreeIfNeeded()
         XCTAssertTrue(backdrop.isHidden)
     }

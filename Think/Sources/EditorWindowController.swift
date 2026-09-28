@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 private final class SidebarSplitView: NSSplitView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -61,7 +62,8 @@ final class NoteWindow: NSWindow {
             let overControl = controls.contains { button in
                 button.convert(button.bounds, to: nil).contains(event.locationInWindow)
             }
-            if !overControl {
+            let overFilename = (windowController as? EditorWindowController)?.editor.filenameContains(event.locationInWindow) ?? false
+            if !overControl && !overFilename {
                 (windowController as? EditorWindowController)?
                     .resignSidebarFocusIfClickedOutsideRows(at: event.locationInWindow)
                 toggleMaximize()
@@ -101,6 +103,7 @@ final class NoteWindow: NSWindow {
             let origin = NSPoint(x: center.x - button.frame.width / 2, y: center.y - button.frame.height / 2)
             if button.frame.origin != origin { button.setFrameOrigin(origin) }
         }
+        (windowController as? EditorWindowController)?.editor.layoutFilename()
     }
 }
 
@@ -111,6 +114,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     private var sidebarVisible = false
     private var sidebarWidth: CGFloat = 240
     private var pendingURL: URL?
+    private var creatingNewNote = false
     private var sidebarButton: NSButton!
     var folderURL: URL? { sidebar.folderURL }
 
@@ -146,6 +150,12 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
 
         sidebar.onOpenFolder = { [weak self] in self?.openFolder(nil) }
         sidebar.onSelectFile = { [weak self] in self?.openInCurrentWindow($0) }
+        sidebar.onRenameFile = { [weak self] url, name in self?.renameFile(url, to: name) ?? false }
+        sidebar.onTrashFile = { [weak self] in self?.trashFile($0) }
+        sidebar.onMoveFile = { [weak self] in self?.moveFile($0) }
+        sidebar.onFilesChanged = { [weak self] in self?.refreshFileBrowsers() }
+        sidebar.onNewFile = { [weak self] in self?.createFile() }
+        editor.onRenameFile = { [weak self] url, name in self?.renameFile(url, to: name) ?? false }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -163,8 +173,102 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     }
 
     func documentLocationDidChange() {
+        editor.updateFilename((document as? NoteDocument)?.fileURL)
         sidebar.reload()
         sidebar.selectFile((document as? NoteDocument)?.fileURL)
+    }
+
+    func didSaveNewFile(at url: URL) {
+        let parent = url.deletingLastPathComponent()
+        let rootComponents = folderURL?.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let parentComponents = parent.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        if rootComponents == nil || !parentComponents.starts(with: rootComponents!) {
+            sidebar.setFolder(parent)
+        }
+        sidebar.revealFile(url)
+        if !sidebarVisible { toggleSidebar(nil) }
+    }
+
+    private func renameFile(_ url: URL, to name: String) -> Bool {
+        guard window?.attachedSheet == nil, pendingURL == nil, !creatingNewNote else { return false }
+        do {
+            let destination = try NoteFileOperations.rename(url, to: name)
+            sidebar.selectFile(destination)
+            refreshFileBrowsers()
+            return true
+        } catch {
+            DispatchQueue.main.async { NSApp.presentError(error) }
+            return false
+        }
+    }
+
+    private func trashFile(_ url: URL) {
+        guard let window, window.attachedSheet == nil, pendingURL == nil, !creatingNewNote else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Move “\(url.lastPathComponent)” to Trash?"
+        let hasUnsavedChanges = NSDocumentController.shared.document(for: url)?.isDocumentEdited ?? false
+        alert.informativeText = hasUnsavedChanges
+            ? "The file will be moved to Trash and its unsaved changes will be discarded."
+            : "You can restore the file from Trash."
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            do {
+                try NoteFileOperations.trash(url)
+                self?.refreshFileBrowsers()
+            } catch { NSApp.presentError(error) }
+        }
+    }
+
+    private func moveFile(_ url: URL) {
+        guard let window, window.attachedSheet == nil, pendingURL == nil, !creatingNewNote else { return }
+        let panel = NSSavePanel()
+        panel.title = "Move File"
+        panel.prompt = "Move"
+        panel.nameFieldStringValue = url.lastPathComponent
+        panel.directoryURL = url.deletingLastPathComponent()
+        panel.allowedContentTypes = [UTType(filenameExtension: "txt")!]
+        panel.allowsOtherFileTypes = false
+        panel.isExtensionHidden = false
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let destination = panel.url, let self else { return }
+            do {
+                let moved = try NoteFileOperations.move(url, to: destination)
+                self.sidebar.setFolder(moved.deletingLastPathComponent())
+                self.sidebar.revealFile(moved)
+                if !self.sidebarVisible { self.toggleSidebar(nil) }
+                self.refreshFileBrowsers()
+            } catch { NSApp.presentError(error) }
+        }
+    }
+
+    private func createFile() {
+        guard let window, window.attachedSheet == nil, pendingURL == nil, !creatingNewNote else { return }
+        let panel = NSSavePanel()
+        panel.title = "New File"
+        panel.prompt = "Create"
+        panel.nameFieldStringValue = "Untitled.txt"
+        panel.directoryURL = folderURL
+        panel.allowedContentTypes = [UTType(filenameExtension: "txt")!]
+        panel.allowsOtherFileTypes = false
+        panel.isExtensionHidden = false
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            do {
+                try Data().write(to: url, options: .withoutOverwriting)
+                self.didSaveNewFile(at: url)
+                self.refreshFileBrowsers()
+                self.openInCurrentWindow(url)
+            } catch { NSApp.presentError(error) }
+        }
+    }
+
+    private func refreshFileBrowsers() {
+        for window in NSApp.windows {
+            (window.windowController as? EditorWindowController)?.sidebar.reload()
+        }
     }
 
     func resignSidebarFocusIfClickedOutsideRows(at point: NSPoint) {
@@ -186,8 +290,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     }
 
     @objc func toggleSidebar(_ sender: Any?) {
+        editor.scrollView.stopWheelAnimation()
+        let scrollPosition = editor.scrollView.contentView.bounds.origin
+        defer {
+            // Resizing the split view lets AppKit scroll the text view while
+            // changing its insets. Restore only after layout and focus settle.
+            window?.contentView?.superview?.layoutSubtreeIfNeeded()
+            editor.restoreScrollPosition(scrollPosition)
+        }
         if sidebarVisible { sidebarWidth = sidebar.frame.width }
         sidebarVisible.toggle()
+        editor.sidebarVisible = sidebarVisible
         window?.minSize = NSSize(width: sidebarVisible ? 720 : 480, height: 360)
         if sidebarVisible, let window, window.frame.width < 720 {
             var frame = window.frame
@@ -224,7 +337,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     }
 
     private func openInCurrentWindow(_ url: URL) {
-        guard pendingURL == nil, window?.attachedSheet == nil,
+        guard pendingURL == nil, !creatingNewNote, window?.attachedSheet == nil,
               let note = document as? NoteDocument else { return }
         if note.fileURL?.standardizedFileURL == url.standardizedFileURL { return }
         if let existing = NSDocumentController.shared.document(for: url) {
@@ -321,6 +434,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         newButton.toolTip = "New Note (⌘N)"
         container.addSubview(sidebarButton)
         container.addSubview(newButton)
+        if let titlebar = window.standardWindowButton(.closeButton)?.superview {
+            editor.installFilename(in: titlebar)
+        }
         (window as? NoteWindow)?.noteButtons = [sidebarButton, newButton]
         (window as? NoteWindow)?.observeTitlebarLayout()
         (window as? NoteWindow)?.alignTitlebarControls()
@@ -337,5 +453,29 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         return button
     }
 
-    @objc private func newNote(_ sender: Any?) { NSDocumentController.shared.newDocument(sender) }
+    @objc func newNote(_ sender: Any?) {
+        guard pendingURL == nil, !creatingNewNote, window?.attachedSheet == nil,
+              let note = document as? NoteDocument else { return }
+        window?.makeFirstResponder(editor.textView)
+        editor.textView.breakUndoCoalescing()
+        creatingNewNote = true
+        note.canClose(withDelegate: self,
+                      shouldClose: #selector(finishNewNote(_:shouldClose:contextInfo:)), contextInfo: nil)
+    }
+
+    @objc private func finishNewNote(_ oldDocument: NSDocument, shouldClose: Bool,
+                                    contextInfo: UnsafeMutableRawPointer?) {
+        guard creatingNewNote else { return }
+        creatingNewNote = false
+        guard shouldClose else { return }
+        do {
+            let note = try NSDocumentController.shared.makeUntitledDocument(ofType: "public.plain-text")
+            guard let note = note as? NoteDocument else { return }
+            NSDocumentController.shared.addDocument(note)
+            oldDocument.removeWindowController(self)
+            note.addWindowController(self)
+            display(note)
+            oldDocument.close()
+        } catch { NSApp.presentError(error) }
+    }
 }

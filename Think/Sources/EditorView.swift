@@ -10,6 +10,9 @@ enum EditorMetrics {
     static let verticalInset: CGFloat = 96
     static let edgeHeight: CGFloat = 28
     static let titlebarHeight: CGFloat = 48
+    static let filenameMaxWidth: CGFloat = 200
+    static let filenameLeadingInset: CGFloat = 180
+    static let filenameSidebarInset: CGFloat = 12
 }
 
 @MainActor
@@ -103,6 +106,12 @@ final class EditorView: NSView, NSTextViewDelegate {
     private let topEdge = EdgeSofteningView(top: true)
     private let bottomEdge = EdgeSofteningView(top: false)
     private let titlebarBackdrop = TitlebarBackdropView()
+    private let filenameLabel = InlineFilenameField(labelWithString: "")
+    private let filenameDivider = NSView()
+    var onRenameFile: ((URL, String) -> Bool)?
+    var sidebarVisible = false {
+        didSet { needsLayout = true }
+    }
     private var boundsObserver: NSObjectProtocol?
     private var textObserver: NSObjectProtocol?
     private var lastWidth: CGFloat = 0
@@ -175,6 +184,19 @@ final class EditorView: NSView, NSTextViewDelegate {
         addSubview(topEdge)
         addSubview(bottomEdge)
         addSubview(titlebarBackdrop)
+        filenameLabel.font = .systemFont(ofSize: EditorMetrics.defaultFontSize, weight: .bold)
+        filenameLabel.textColor = NSColor(white: 0.05, alpha: 1)
+        filenameLabel.lineBreakMode = .byTruncatingMiddle
+        filenameLabel.maximumNumberOfLines = 1
+        filenameLabel.cell?.usesSingleLineMode = true
+        filenameLabel.isHidden = true
+        filenameLabel.renameOnClick = true
+        filenameLabel.hidesTextExtension = true
+        addSubview(filenameLabel)
+        filenameDivider.wantsLayer = true
+        filenameDivider.layer?.backgroundColor = NSColor(white: 0.72, alpha: 1).cgColor
+        filenameDivider.isHidden = true
+        addSubview(filenameDivider)
 
         scrollView.contentView.postsBoundsChangedNotifications = true
         boundsObserver = NotificationCenter.default.addObserver(
@@ -198,6 +220,17 @@ final class EditorView: NSView, NSTextViewDelegate {
         guard fontSize != size else { return }
         fontSize = size
         applyFontSize()
+    }
+
+    func restoreScrollPosition(_ position: NSPoint) {
+        layoutSubtreeIfNeeded()
+        if let container = textView.textContainer {
+            textView.layoutManager?.ensureLayout(for: container)
+        }
+        textView.sizeToFit()
+        scrollView.contentView.scroll(to: position)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        updateEdges()
     }
 
     private func applyFontSize() {
@@ -232,13 +265,53 @@ final class EditorView: NSView, NSTextViewDelegate {
                                   width: contentFrame.width, height: EditorMetrics.edgeHeight)
         titlebarBackdrop.frame = NSRect(x: bounds.minX, y: bounds.maxY - EditorMetrics.titlebarHeight,
                                         width: bounds.width, height: EditorMetrics.titlebarHeight)
-        let inset = textView.textContainerInset.width
-        let columnStart = convert(NSPoint(x: inset, y: 0), to: nil).x
-        titlebarBackdrop.isHidden = columnStart >= 166
+        layoutFilename()
+        let filenameX = sidebarVisible ? EditorMetrics.filenameSidebarInset : EditorMetrics.filenameLeadingInset
+        // Reserve the maximum title width even for short names or unsaved notes,
+        // keeping this breakpoint stable when switching or saving documents.
+        titlebarBackdrop.isHidden = textView.textContainerInset.width > filenameX + EditorMetrics.filenameMaxWidth
         updateEdges()
     }
 
+    func installFilename(in titlebar: NSView) {
+        // Keep text above the native titlebar material, which blurs content
+        // drawn behind it in the full-size editor view.
+        titlebar.addSubview(filenameLabel)
+        titlebar.addSubview(filenameDivider)
+        layoutFilename()
+    }
+
+    func layoutFilename() {
+        guard let parent = filenameLabel.superview else { return }
+        let filenameX = sidebarVisible ? EditorMetrics.filenameSidebarInset : EditorMetrics.filenameLeadingInset
+        let labelHeight = ceil(filenameLabel.intrinsicContentSize.height)
+        let frame = convert(NSRect(x: filenameX,
+                                   y: bounds.maxY - EditorMetrics.titlebarHeight / 2 - labelHeight / 2,
+                                   width: EditorMetrics.filenameMaxWidth, height: labelHeight), to: parent)
+        filenameLabel.frame = parent.backingAlignedRect(frame, options: .alignAllEdgesNearest)
+        filenameDivider.frame = convert(NSRect(x: filenameX - 14, y: bounds.maxY - 31,
+                                               width: 1, height: 14), to: parent)
+        filenameDivider.isHidden = sidebarVisible || filenameLabel.isHidden
+    }
+
+    func updateFilename(_ url: URL?) {
+        filenameLabel.cancelRename()
+        filenameLabel.setFilename(url?.lastPathComponent ?? "")
+        filenameLabel.onCommit = { [weak self] name in
+            guard let url else { return false }
+            return self?.onRenameFile?(url, name) ?? false
+        }
+        filenameLabel.toolTip = url?.lastPathComponent
+        filenameLabel.isHidden = url == nil
+        needsLayout = true
+    }
+
+    func filenameContains(_ point: NSPoint) -> Bool {
+        !filenameLabel.isHidden && filenameLabel.convert(filenameLabel.bounds, to: nil).contains(point)
+    }
+
     func display(_ note: NoteDocument) {
+        updateFilename(note.fileURL)
         scrollView.stopWheelAnimation()
         textView.breakUndoCoalescing()
         textView.note = nil
@@ -277,6 +350,86 @@ final class EditorView: NSView, NSTextViewDelegate {
         let hideBottom = textView.bounds.height <= viewport.maxY + 1
         if topEdge.isHidden != hideTop { topEdge.isHidden = hideTop }
         if bottomEdge.isHidden != hideBottom { bottomEdge.isHidden = hideBottom }
+    }
+}
+
+final class InlineFilenameField: NSTextField, NSTextFieldDelegate {
+    var renameOnClick = false
+    var hidesTextExtension = false
+    private var fullFilename: String?
+    var onCommit: ((String) -> Bool)?
+    var onEditingEnded: (() -> Void)?
+    private(set) var isRenaming = false
+    private var originalName = ""
+
+    func setFilename(_ name: String) {
+        fullFilename = name
+        stringValue = hidesTextExtension && (name as NSString).pathExtension.lowercased() == "txt"
+            ? (name as NSString).deletingPathExtension : name
+    }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        if isRenaming { super.mouseDown(with: event) }
+        else if renameOnClick { beginRename() }
+        else { super.mouseDown(with: event) }
+    }
+
+    func beginRename() {
+        guard !isRenaming, !isHidden, window?.attachedSheet == nil else { return }
+        originalName = fullFilename ?? stringValue
+        stringValue = originalName
+        isRenaming = true
+        delegate = self
+        isEditable = true
+        isSelectable = true
+        isBezeled = true
+        drawsBackground = true
+        backgroundColor = .textBackgroundColor
+        lineBreakMode = .byClipping
+        selectText(nil)
+        let stem = (originalName as NSString).deletingPathExtension
+        (currentEditor() as? NSTextView)?.setSelectedRange(NSRange(location: 0, length: (stem as NSString).length))
+    }
+
+    func cancelRename() {
+        guard isRenaming else { return }
+        finishRename(commit: false)
+    }
+
+    private func finishRename(commit: Bool) {
+        guard isRenaming else { return }
+        let proposed = currentEditor()?.string ?? stringValue
+        isRenaming = false
+        // End field editing before a successful rename refreshes sidebar rows.
+        abortEditing()
+        isEditable = false
+        isSelectable = false
+        isBezeled = false
+        drawsBackground = false
+        lineBreakMode = .byTruncatingMiddle
+        setFilename(originalName)
+        if commit, proposed != originalName, onCommit?(proposed) == true {
+            setFilename((proposed as NSString).pathExtension.isEmpty ? proposed + ".txt" : proposed)
+        }
+        onEditingEnded?()
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        finishRename(commit: true)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            finishRename(commit: false)
+            return true
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            finishRename(commit: true)
+            return true
+        }
+        return false
     }
 }
 

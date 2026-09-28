@@ -17,11 +17,12 @@ The release build produces a universal app for Apple silicon and Intel. It is lo
 
 ## Writing
 
-Launching Think opens a blank note with the cursor ready. Each new note has its own window and undo history.
+Launching Think opens a blank note with the cursor ready. New Note reuses the current window after resolving unsaved changes. New Window opens a separate note with independent undo history.
 
 | Action | Shortcut |
 | --- | --- |
-| New note in a new window | ⌘N |
+| New note in current window | ⌘N |
+| New window | ⇧⌘N |
 | Open a text file | ⌘O |
 | Open a folder | ⇧⌘O |
 | Save | ⌘S |
@@ -36,10 +37,14 @@ The two buttons beside the window controls toggle the sidebar and create a new n
 
 Selecting a sidebar file reuses the current window after resolving unsaved changes. If the file is already open, its existing window comes forward. Opening a folder does not replace the current note. When a folder is open, the first Save dialog starts there.
 
+Double-click a sidebar file, or select it and press Return, to edit its name in place. Clicking the saved filename in the topbar edits it there too. Return applies the name, Escape cancels, and clicking elsewhere applies the change. Renaming preserves pending edits and refuses to overwrite another file. Command–Backspace and the Delete context-menu action ask for confirmation before moving the file to Trash. Deleting an open file replaces it with a clean, empty note in the same window, keeping the sidebar folder unchanged.
+
+Right-click a sidebar file to reveal it in Finder, copy its full path or path relative to the sidebar root, copy the file, move it, rename it, or delete it. “Move to…” opens a destination dialog and then shows that folder in the sidebar. With the sidebar focused, ⌘C copies the selected file and ⌘V pastes text files from Think or Finder into the selected folder (or the selected file’s containing folder). Right-click a folder or empty sidebar space for Paste. Existing names receive a “copy” suffix instead of being overwritten.
+
 ## Files and saving
 
 - Native macOS Open and Save dialogs.
-- New notes ask for a name and location on their first save.
+- New notes ask for a name and location on their first save. The sidebar then shows the containing folder, preserving its existing root when the file is saved within that folder or a subfolder.
 - Closing a changed note, switching files, or quitting uses macOS's save/cancel/discard flow. An untouched blank note closes immediately.
 - Saving is explicit. Think does not silently overwrite files or autosave new notes to a private library.
 - Files are saved as UTF-8 `.txt`. UTF-8 and BOM-marked UTF-16/UTF-32 input are accepted. Unsupported encodings are rejected rather than replaced with corrupted text.
