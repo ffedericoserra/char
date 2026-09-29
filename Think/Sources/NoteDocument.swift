@@ -10,27 +10,22 @@ enum NoteFileOperations {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInvalidFileNameError,
                           userInfo: [NSLocalizedDescriptionKey: "Enter a valid filename without slashes or colons."])
         }
-        let filename = (name as NSString).pathExtension.isEmpty ? name + ".txt" : name
-        guard (filename as NSString).pathExtension.lowercased() == "txt" else {
-            throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInvalidFileNameError,
-                          userInfo: [NSLocalizedDescriptionKey: "The filename must use the .txt extension."])
-        }
-        let destination = url.deletingLastPathComponent().appendingPathComponent(filename)
+        let destination = url.deletingLastPathComponent().appendingPathComponent(name)
         return try move(url, to: destination)
     }
 
     static func copy(_ url: URL, into directory: URL) throws -> URL {
         let values = try url.resourceValues(forKeys: [.isRegularFileKey])
-        guard values.isRegularFile == true, url.pathExtension.lowercased() == "txt" else {
+        guard values.isRegularFile == true else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnsupportedSchemeError,
-                          userInfo: [NSLocalizedDescriptionKey: "Only text files can be pasted into the sidebar."])
+                          userInfo: [NSLocalizedDescriptionKey: "Only files can be pasted into the sidebar."])
         }
         var destination = directory.appendingPathComponent(url.lastPathComponent)
         let stem = url.deletingPathExtension().lastPathComponent
         var index = 1
         while FileManager.default.fileExists(atPath: destination.path) {
             let suffix = index == 1 ? " copy" : " copy \(index)"
-            destination = directory.appendingPathComponent(stem + suffix).appendingPathExtension(url.pathExtension)
+            destination = directory.appendingPathComponent(stem + suffix + (url.pathExtension.isEmpty ? "" : "." + url.pathExtension))
             index += 1
         }
         try FileManager.default.copyItem(at: url, to: destination)
@@ -98,8 +93,14 @@ final class NoteDocument: NSDocument {
     }
 
     override func prepareSavePanel(_ savePanel: NSSavePanel) -> Bool {
-        savePanel.allowedContentTypes = [UTType(filenameExtension: "txt")!]
-        savePanel.allowsOtherFileTypes = false
+        savePanel.allowedContentTypes = fileURL == nil ? [UTType(filenameExtension: "txt")!] : []
+        if fileURL == nil {
+            let name = savePanel.nameFieldStringValue
+            if (name as NSString).pathExtension.isEmpty {
+                savePanel.nameFieldStringValue = (name.isEmpty ? "Untitled" : name) + ".txt"
+            }
+        }
+        savePanel.allowsOtherFileTypes = true
         savePanel.isExtensionHidden = false
         if fileURL == nil,
            let controller = windowControllers.first as? EditorWindowController,

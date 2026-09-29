@@ -36,24 +36,141 @@ final class PlainTextTests: XCTestCase {
         XCTAssertThrowsError(try PlainText.decode(Data([0, 1, 2, 3])))
     }
 
-    func testDirectoryListsOnlyTextFilesAndNavigableFolders() throws {
+    func testDirectoryListsAllFileExtensionsAndNavigableFolders() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        for name in ["note10.txt", "note2.txt", "UPPER.TXT", "image.png", ".hidden.txt"] {
+        for name in ["note10.txt", "note2.txt", "UPPER.TXT", "image.png", "README", "config.json", ".hidden.txt"] {
             try Data().write(to: directory.appendingPathComponent(name))
         }
         let folder = directory.appendingPathComponent("Journal")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("loop"), withDestinationURL: directory)
         let entries = try FolderEntry.contents(of: directory)
-        XCTAssertEqual(entries.map(\.url.lastPathComponent), ["Journal", "note2.txt", "note10.txt", "UPPER.TXT"])
+        XCTAssertEqual(entries.map(\.url.lastPathComponent), ["Journal", "config.json", "image.png", "note2.txt", "note10.txt", "README", "UPPER.TXT"])
         XCTAssertTrue(entries[0].isDirectory)
     }
 }
 
 @MainActor
 final class DocumentTests: XCTestCase {
+    func testMovingCaretLeavesNoPixelsOutsideNativeInvalidationRect() throws {
+        let textView = NoteTextView(usingTextLayoutManager: false)
+        for scale in [1, 2] {
+            for font in [NSFont.systemFont(ofSize: 14, weight: .regular),
+                         NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+                         NSFont.systemFont(ofSize: 23, weight: .regular)] {
+                textView.font = font
+                let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                    bitmapDataPlanes: nil, pixelsWide: 64 * scale, pixelsHigh: 64 * scale,
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: bitmap))
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = context
+                context.cgContext.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
+                NSColor.white.setFill()
+                NSRect(x: 0, y: 0, width: 64, height: 64).fill()
+                // A fractional glyph advance and a shorter native line box
+                // reproduce both ways custom caret pixels can escape erasure.
+                let rect = NSRect(x: 10.2, y: 10, width: 1,
+                                  height: floor(font.ascender - font.descender))
+                textView.drawInsertionPoint(in: rect, color: .black, turnedOn: true)
+                context.flushGraphics()
+                let hasCaret = (0..<bitmap.pixelsHigh).contains { y in
+                    (0..<bitmap.pixelsWide).contains { x in
+                        (bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)?.redComponent ?? 1) < 0.5
+                    }
+                }
+                XCTAssertTrue(hasCaret, "The test must draw a visible caret")
+                // Model AppKit repainting the old caret's dirty rectangle.
+                // Dirty regions cover whole backing pixels; clearing a
+                // fractional rectangle would itself leave antialiased edges.
+                let backingRect = NSRect(x: rect.minX * CGFloat(scale), y: rect.minY * CGFloat(scale),
+                                         width: rect.width * CGFloat(scale), height: rect.height * CGFloat(scale)).integral
+                NSColor.white.setFill()
+                NSRect(x: backingRect.minX / CGFloat(scale), y: backingRect.minY / CGFloat(scale),
+                       width: backingRect.width / CGFloat(scale), height: backingRect.height / CGFloat(scale)).fill()
+                context.flushGraphics()
+                NSGraphicsContext.restoreGraphicsState()
+                var leftoverPixels = 0
+                for y in 0..<bitmap.pixelsHigh {
+                    for x in 0..<bitmap.pixelsWide {
+                        if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                           min(color.redComponent, color.greenComponent, color.blueComponent) < 0.95 {
+                            leftoverPixels += 1
+                        }
+                    }
+                }
+                XCTAssertEqual(leftoverPixels, 0, "Caret residue at \(scale)x with \(font.fontName)")
+            }
+        }
+    }
+
+    func testArbitraryFilenamesSurviveCopyRenameAndTextEditing() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for filename in ["config.json", "script.swift", "README"] {
+            let url = directory.appendingPathComponent(filename)
+            let data = Data("hello 🌍".utf8)
+            try data.write(to: url)
+            let document = NoteDocument()
+            try document.read(from: url, ofType: "public.plain-text")
+            XCTAssertEqual(try document.data(ofType: "public.plain-text"), data)
+            let copy = try NoteFileOperations.copy(url, into: directory)
+            XCTAssertEqual(copy.pathExtension, url.pathExtension)
+            XCTAssertEqual(try Data(contentsOf: copy), data)
+            let renamed = try NoteFileOperations.rename(copy, to: "renamed-" + filename)
+            XCTAssertEqual(renamed.lastPathComponent, "renamed-" + filename)
+        }
+        let panel = NSSavePanel()
+        XCTAssertTrue(NoteDocument().prepareSavePanel(panel))
+        XCTAssertTrue(panel.allowsOtherFileTypes)
+        XCTAssertEqual(panel.allowedContentTypes.first?.preferredFilenameExtension, "txt")
+        XCTAssertEqual(panel.nameFieldStringValue, "Untitled.txt")
+    }
+
+    func testReturnCopiesLeadingTabsAndSupportsUndo() throws {
+        let note = NoteDocument()
+        note.text = "Earlier line\n\t\tThought ☕️"
+        note.makeWindowControllers()
+        defer { note.close() }
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        let editor = controller.editor.textView
+        let original = note.text
+        let undo = try XCTUnwrap(note.undoManager)
+        undo.groupsByEvent = false
+        editor.setSelectedRange(NSRange(location: (original as NSString).length, length: 0))
+        undo.beginUndoGrouping()
+        editor.insertNewline(nil)
+        editor.breakUndoCoalescing()
+        undo.endUndoGrouping()
+        XCTAssertEqual(note.text, original + "\n\t\t")
+        XCTAssertEqual(editor.selectedRange().location, (note.text as NSString).length)
+        undo.undo()
+        XCTAssertEqual(note.text, original)
+        undo.redo()
+        XCTAssertEqual(note.text, original + "\n\t\t")
+
+        for (text, position, expected) in [
+            ("\t\t", 2, "\t\t\n\t\t"),
+            ("\t\tabcd", 4, "\t\tab\n\t\tcd"),
+            ("\t\tabcd", 1, "\t\n\t\tabcd"),
+            ("plain\ttext", 10, "plain\ttext\n"),
+            ("\tprevious\n", 10, "\tprevious\n\n")
+        ] {
+            note.text = text
+            controller.display(note)
+            editor.setSelectedRange(NSRange(location: position, length: 0))
+            undo.beginUndoGrouping()
+            editor.insertNewline(nil)
+            editor.breakUndoCoalescing()
+            undo.endUndoGrouping()
+            XCTAssertEqual(note.text, expected)
+        }
+    }
+
     func testSidebarTogglePreservesEditorScrollPosition() throws {
         let note = NoteDocument()
         note.text = String(repeating: "A line of text that stays visible while toggling the sidebar.\n", count: 300)
@@ -250,7 +367,7 @@ final class DocumentTests: XCTestCase {
         XCTAssertEqual(note.fileURL, original)
 
         let renamed = try NoteFileOperations.rename(original, to: "Renamed ☕️")
-        XCTAssertEqual(renamed.lastPathComponent, "Renamed ☕️.txt")
+        XCTAssertEqual(renamed.lastPathComponent, "Renamed ☕️")
         XCTAssertEqual(note.fileURL, renamed)
         XCTAssertEqual(note.text, "Pending edits")
         XCTAssertTrue(note.isDocumentEdited)
@@ -514,6 +631,57 @@ final class DocumentTests: XCTestCase {
         XCTAssertTrue(sidebar.isHidden)
     }
 
+    func testFullScreenControlsOverlayContentAndRestoreTitlebar() throws {
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window as? NoteWindow)
+        defer { window.close() }
+        controller.showWindow(nil)
+        let split = try XCTUnwrap(window.contentView as? NSSplitView)
+        let toolbar = try XCTUnwrap(window.toolbar)
+        let accessory = try XCTUnwrap(window.titlebarAccessoryViewControllers.first)
+
+        for failedToEnter in [false, true] {
+            controller.windowWillEnterFullScreen(Notification(name: NSWindow.willEnterFullScreenNotification, object: window))
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            XCTAssertNil(window.toolbar)
+            XCTAssertTrue(window.titlebarAccessoryViewControllers.isEmpty)
+            XCTAssertEqual(split.arrangedSubviews.count, 2, "The controls must not become a split pane")
+            for button in window.noteButtons {
+                XCTAssertTrue(button.isDescendant(of: split))
+                XCTAssertEqual(button.convert(button.bounds, to: nil).midY,
+                               window.frame.height - (button === window.noteButtons.last ? 23 : 24), accuracy: 0.5)
+            }
+            controller.toggleSidebar(nil)
+            XCTAssertEqual(split.arrangedSubviews.count, 2)
+            controller.toggleSidebar(nil)
+
+            if failedToEnter {
+                controller.windowDidFailToEnterFullScreen(window)
+            } else {
+                let nativeButtons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+                    .compactMap { window.standardWindowButton($0) }
+                controller.windowWillExitFullScreen(Notification(name: NSWindow.willExitFullScreenNotification, object: window))
+                window.displayIfNeeded()
+                XCTAssertTrue(nativeButtons.allSatisfy { $0.alphaValue == 0 })
+                controller.windowDidFailToExitFullScreen(window)
+                XCTAssertTrue(nativeButtons.allSatisfy { $0.alphaValue == 1 })
+                controller.windowWillExitFullScreen(Notification(name: NSWindow.willExitFullScreenNotification, object: window))
+                controller.windowDidExitFullScreen(Notification(name: NSWindow.didExitFullScreenNotification, object: window))
+                XCTAssertTrue(nativeButtons.allSatisfy { $0.alphaValue == 0 })
+                window.displayIfNeeded()
+                XCTAssertTrue(nativeButtons.allSatisfy { $0.alphaValue == 1 })
+                for (button, x) in zip(nativeButtons + window.noteButtons, [23.0, 43.0, 63.0, 102.0, 136.0]) {
+                    XCTAssertEqual(button.convert(button.bounds, to: nil).midX, x, accuracy: 0.5)
+                }
+            }
+            XCTAssertTrue(window.toolbar === toolbar)
+            XCTAssertTrue(window.titlebarAccessoryViewControllers.first === accessory)
+            XCTAssertEqual(split.subviews.count, 2)
+            XCTAssertTrue(window.noteButtons.allSatisfy { $0.superview === accessory.view })
+        }
+    }
+
     func testNarrowWindowProtectsTitlebar() throws {
         let controller = EditorWindowController()
         let window = try XCTUnwrap(controller.window)
@@ -635,6 +803,26 @@ final class DocumentTests: XCTestCase {
         }
     }
 
+    func testMouseWheelBurstAccumulatesFullDistance() throws {
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { throw XCTSkip("Reduce Motion disables wheel animation.") }
+        let note = NoteDocument()
+        note.text = String(repeating: "A line of text.\n", count: 300)
+        note.makeWindowControllers()
+        defer { note.close() }
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        controller.showWindow(nil)
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
+        let scroll = controller.editor.scrollView
+        let initialY = scroll.contentView.bounds.minY
+        for _ in 0..<3 { scroll.scrollWheel(with: DiscreteWheelEvent()) }
+        let settled = expectation(description: "Burst settles at its full distance")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            XCTAssertEqual(scroll.contentView.bounds.minY, initialY + 72 * scroll.verticalLineScroll, accuracy: 0.5)
+            settled.fulfill()
+        }
+        wait(for: [settled], timeout: 2)
+    }
+
     func testMouseWheelEasesAndSettles() throws {
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             throw XCTSkip("Reduce Motion intentionally disables wheel animation.")
@@ -654,7 +842,7 @@ final class DocumentTests: XCTestCase {
         XCTAssertEqual(scroll.contentView.bounds.minY, initialY, accuracy: 0.01)
         let settled = expectation(description: "Wheel animation reaches its destination")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            XCTAssertEqual(scroll.contentView.bounds.minY, initialY + 6 * scroll.verticalLineScroll, accuracy: 0.5)
+            XCTAssertEqual(scroll.contentView.bounds.minY, initialY + 24 * scroll.verticalLineScroll, accuracy: 0.5)
             settled.fulfill()
         }
         wait(for: [settled], timeout: 2)
@@ -668,13 +856,13 @@ final class DocumentTests: XCTestCase {
         XCTAssertEqual(note.text, "")
         XCTAssertNil(note.fileURL)
         XCTAssertFalse(note.isDocumentEdited)
-        XCTAssertEqual(controller.editor.textView.font?.pointSize, 14)
+        XCTAssertEqual(controller.editor.textView.font?.pointSize, EditorSession.fontSize)
         XCTAssertFalse(controller.editor.textView.isRichText)
         XCTAssertTrue(controller.editor.textView.undoManager === note.undoManager)
         XCTAssertFalse(NoteDocument.autosavesInPlace)
     }
 
-    func testFontSizeChangesStayInSessionWithoutEditingNote() throws {
+    func testFontSizeChangesApplyAcrossWindowsWithoutEditingNote() throws {
         let originalSize = EditorSession.fontSize
         defer { EditorSession.fontSize = originalSize }
         let note = NoteDocument()
@@ -697,6 +885,44 @@ final class DocumentTests: XCTestCase {
 
         controller.decreaseFontSize(nil)
         XCTAssertEqual(controller.editor.textView.font?.pointSize, originalSize)
+    }
+
+    func testFontPreferencesToggleCustomFamilyAndRestoreDefaults() throws {
+        let keys = ["noteFontSize", "noteFontFamily", "noteSystemMonospace"]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value { UserDefaults.standard.set(value, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
+        EditorSession.restoreDefaults()
+        let note = NoteDocument()
+        note.text = "Font preview\nAnother line"
+        note.makeWindowControllers()
+        defer { note.close() }
+        let editor = try XCTUnwrap((note.windowControllers.first as? EditorWindowController)?.editor)
+        editor.textView.setSelectedRange(NSRange(location: 2, length: 3))
+        EditorSession.toggleSystemMonospace()
+        XCTAssertEqual(editor.textView.font?.fontName, NSFont.monospacedSystemFont(ofSize: 14, weight: .regular).fontName)
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "noteSystemMonospace"))
+        EditorSession.toggleSystemMonospace()
+        XCTAssertEqual(editor.textView.font?.fontName, NSFont.systemFont(ofSize: 14).fontName)
+        let custom = try XCTUnwrap(NSFont(name: "Times-Roman", size: 19)?.familyName)
+        EditorSession.fontFamily = custom
+        EditorSession.fontSize = 19
+        EditorSession.toggleSystemMonospace()
+        XCTAssertFalse(EditorSession.systemMonospace)
+        XCTAssertEqual(editor.textView.font?.familyName, custom)
+        XCTAssertEqual(editor.textView.font?.pointSize, 19)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "noteFontFamily"), custom)
+        XCTAssertEqual(UserDefaults.standard.double(forKey: "noteFontSize"), 19)
+        EditorSession.restoreDefaults()
+        XCTAssertEqual(editor.textView.font?.fontName, NSFont.systemFont(ofSize: 14).fontName)
+        XCTAssertEqual(editor.textView.font?.pointSize, 14)
+        XCTAssertEqual(editor.textView.selectedRange(), NSRange(location: 2, length: 3))
+        XCTAssertEqual(note.text, "Font preview\nAnother line")
+        XCTAssertFalse(note.isDocumentEdited)
     }
 
     func testEditingUndoRedoAndDirtyState() throws {

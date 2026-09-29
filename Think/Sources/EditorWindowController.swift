@@ -27,6 +27,28 @@ final class NoteWindow: NSWindow {
     private var controlFrameObservers: [NSObjectProtocol] = []
     private var isAligningControls = false
     private var frameBeforeMaximize: NSRect?
+    private var revealWindowControlsAfterLayout = false
+
+    func hideWindowControlsForFullScreenExit() {
+        revealWindowControlsAfterLayout = false
+        setWindowControlsAlpha(0)
+    }
+
+    func revealWindowControlsOnNextDisplay() {
+        revealWindowControlsAfterLayout = true
+        contentView?.needsDisplay = true
+    }
+
+    func cancelWindowControlsTransition() {
+        revealWindowControlsAfterLayout = false
+        setWindowControlsAlpha(1)
+    }
+
+    private func setWindowControlsAlpha(_ alpha: CGFloat) {
+        for type in [ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            standardWindowButton(type)?.alphaValue = alpha
+        }
+    }
 
     func observeTitlebarLayout() {
         for type in [ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
@@ -50,6 +72,13 @@ final class NoteWindow: NSWindow {
         // the zoom button's frame until the next mouse or keyboard event.
         contentView?.superview?.layoutSubtreeIfNeeded()
         alignTitlebarControls()
+        // The exit notification restores the toolbar, but AppKit still has
+        // layout to finish. Reveal the traffic lights only after that layout
+        // and our custom control alignment, in the same display pass.
+        if revealWindowControlsAfterLayout, !styleMask.contains(.fullScreen),
+           (windowController as? EditorWindowController)?.usesFullScreenChrome != true {
+            cancelWindowControlsTransition()
+        }
         super.displayIfNeeded()
     }
 
@@ -92,7 +121,8 @@ final class NoteWindow: NSWindow {
     }
 
     func alignTitlebarControls() {
-        guard !isAligningControls, !styleMask.contains(.fullScreen) else { return }
+        guard !isAligningControls, !styleMask.contains(.fullScreen),
+              (windowController as? EditorWindowController)?.usesFullScreenChrome != true else { return }
         isAligningControls = true
         defer { isAligningControls = false }
         let nativeButtons = [ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { standardWindowButton($0) }
@@ -116,6 +146,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     private var pendingURL: URL?
     private var creatingNewNote = false
     private var sidebarButton: NSButton!
+    private var noteToolbar: NSToolbar?
+    private var noteAccessory: NSTitlebarAccessoryViewController?
+    private let fullScreenControls = NSView()
+    fileprivate var usesFullScreenChrome = false
     var folderURL: URL? { sidebar.folderURL }
 
     init() {
@@ -138,6 +172,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         window.center()
 
         splitView.isVertical = true
+        splitView.arrangesAllSubviews = false
         splitView.dividerStyle = .thin
         splitView.delegate = self
         splitView.addArrangedSubview(sidebar)
@@ -229,8 +264,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         panel.prompt = "Move"
         panel.nameFieldStringValue = url.lastPathComponent
         panel.directoryURL = url.deletingLastPathComponent()
-        panel.allowedContentTypes = [UTType(filenameExtension: "txt")!]
-        panel.allowsOtherFileTypes = false
+        panel.allowedContentTypes = []
+        panel.allowsOtherFileTypes = true
         panel.isExtensionHidden = false
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let destination = panel.url, let self else { return }
@@ -252,7 +287,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         panel.nameFieldStringValue = "Untitled.txt"
         panel.directoryURL = folderURL
         panel.allowedContentTypes = [UTType(filenameExtension: "txt")!]
-        panel.allowsOtherFileTypes = false
+        panel.allowsOtherFileTypes = true
         panel.isExtensionHidden = false
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
@@ -283,10 +318,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
                        max(EditorMetrics.minimumFontSize, EditorSession.fontSize + step))
         guard size != EditorSession.fontSize else { return }
         EditorSession.fontSize = size
-        for window in NSApp.windows {
-            (window.windowController as? EditorWindowController)?.editor.setFontSize(size)
-        }
-        editor.setFontSize(size)
     }
 
     @objc func toggleSidebar(_ sender: Any?) {
@@ -395,6 +426,63 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
 
     func windowDidResize(_ notification: Notification) { (window as? NoteWindow)?.alignTitlebarControls() }
 
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        setFullScreenChrome(true)
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        setFullScreenChrome(false)
+        (window as? NoteWindow)?.revealWindowControlsOnNextDisplay()
+    }
+
+    func windowWillExitFullScreen(_ notification: Notification) {
+        (window as? NoteWindow)?.hideWindowControlsForFullScreenExit()
+    }
+
+    func windowDidFailToExitFullScreen(_ window: NSWindow) {
+        (window as? NoteWindow)?.cancelWindowControlsTransition()
+    }
+
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        setFullScreenChrome(false)
+    }
+
+    private func setFullScreenChrome(_ fullScreen: Bool) {
+        guard usesFullScreenChrome != fullScreen,
+              let window = window as? NoteWindow, let accessory = noteAccessory else { return }
+        usesFullScreenChrome = fullScreen
+        if fullScreen {
+            // AppKit puts the native toolbar in an opaque full-screen overlay.
+            // Keep our controls on the full-size content so the editor's fade
+            // remains visible beneath them, just as it is in a normal window.
+            if let index = window.titlebarAccessoryViewControllers.firstIndex(of: accessory) {
+                window.removeTitlebarAccessoryViewController(at: index)
+            }
+            window.toolbar = nil
+            fullScreenControls.frame = NSRect(x: 0,
+                                             y: splitView.isFlipped ? splitView.bounds.minY : splitView.bounds.maxY - 48,
+                                             width: 80, height: 48)
+            fullScreenControls.autoresizingMask = splitView.isFlipped ? [.maxYMargin] : [.minYMargin]
+            splitView.addSubview(fullScreenControls)
+            for (index, button) in window.noteButtons.enumerated() {
+                fullScreenControls.addSubview(button)
+                button.frame = NSRect(x: 8 + CGFloat(index) * 34, y: index == 1 ? 12 : 11,
+                                      width: 26, height: 26)
+            }
+            editor.installFilename(in: editor)
+        } else {
+            for button in window.noteButtons { accessory.view.addSubview(button) }
+            fullScreenControls.removeFromSuperview()
+            window.toolbar = noteToolbar
+            window.addTitlebarAccessoryViewController(accessory)
+            if let titlebar = window.standardWindowButton(.closeButton)?.superview {
+                editor.installFilename(in: titlebar)
+            }
+            window.alignTitlebarControls()
+        }
+        editor.needsLayout = true
+    }
+
     func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
         window.screen?.visibleFrame ?? newFrame
     }
@@ -414,12 +502,15 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
 
     private func addTitlebarButtons(to window: NSWindow) {
         let toolbar = NSToolbar(identifier: "NoteToolbar")
+        noteToolbar = toolbar
         toolbar.showsBaselineSeparator = false
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
+        toolbar.allowsDisplayModeCustomization = false
         window.toolbarStyle = .unified
         window.toolbar = toolbar
         let accessory = NSTitlebarAccessoryViewController()
+        noteAccessory = accessory
         accessory.layoutAttribute = .left
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 80, height: 48))
         accessory.view = container

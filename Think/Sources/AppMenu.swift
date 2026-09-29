@@ -9,6 +9,9 @@ enum AppMenu {
         let app = submenu("Think", in: main)
         item("About Think", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), in: app)
         app.addItem(.separator())
+        let settings = item("Settings…", #selector(AppDelegate.showSettings(_:)), key: ",", in: app)
+        settings.target = NSApp.delegate
+        app.addItem(.separator())
         let services = submenu("Services", in: app)
         NSApp.servicesMenu = services
         app.addItem(.separator())
@@ -45,6 +48,8 @@ enum AppMenu {
 
         let view = submenu("View", in: main)
         item("Toggle Sidebar", #selector(EditorWindowController.toggleSidebar(_:)), key: "b", in: view)
+        let mono = item("System Monospace", #selector(AppDelegate.toggleSystemMonospace(_:)), key: "m", modifiers: [.command, .shift], in: view)
+        mono.target = NSApp.delegate
         item("Increase Font Size", #selector(EditorWindowController.increaseFontSize(_:)), key: "+", in: view)
         item("Decrease Font Size", #selector(EditorWindowController.decreaseFontSize(_:)), key: "-", in: view)
         item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), key: "f", modifiers: [.command, .control], in: view)

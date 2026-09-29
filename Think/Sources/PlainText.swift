@@ -28,7 +28,7 @@ enum PlainText {
         guard let text = String(data: data.dropFirst(prefixLength), encoding: encoding), !text.contains("\0") else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadInapplicableStringEncodingError,
                           userInfo: [NSLocalizedDescriptionKey: "This file couldn’t be opened as plain text.",
-                                     NSLocalizedRecoverySuggestionErrorKey: "Use a UTF-8 or Unicode .txt file."])
+                                     NSLocalizedRecoverySuggestionErrorKey: "Use a UTF-8 or Unicode text file."])
         }
         return text
     }

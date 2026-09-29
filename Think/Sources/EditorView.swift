@@ -12,18 +12,83 @@ enum EditorMetrics {
     static let titlebarHeight: CGFloat = 48
     static let filenameMaxWidth: CGFloat = 200
     static let filenameLeadingInset: CGFloat = 180
+    static let filenameButtonSpacing: CGFloat = 31
     static let filenameSidebarInset: CGFloat = 12
 }
 
 @MainActor
 enum EditorSession {
-    static var fontSize = EditorMetrics.defaultFontSize
+    static let fontDidChange = Notification.Name("ThinkNoteFontDidChange")
+    static var fontSize: CGFloat {
+        get {
+            let value = UserDefaults.standard.double(forKey: "noteFontSize")
+            return value > 0 ? min(EditorMetrics.maximumFontSize, max(EditorMetrics.minimumFontSize, value)) : EditorMetrics.defaultFontSize
+        }
+        set {
+            UserDefaults.standard.set(min(EditorMetrics.maximumFontSize, max(EditorMetrics.minimumFontSize, newValue)), forKey: "noteFontSize")
+            updateEditors()
+        }
+    }
+    static var fontFamily: String {
+        get { UserDefaults.standard.string(forKey: "noteFontFamily") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "noteFontFamily"); updateEditors() }
+    }
+    static var systemMonospace: Bool {
+        get { UserDefaults.standard.bool(forKey: "noteSystemMonospace") }
+        set { UserDefaults.standard.set(newValue, forKey: "noteSystemMonospace"); updateEditors() }
+    }
+    static func font(ofSize size: CGFloat) -> NSFont {
+        if !fontFamily.isEmpty,
+           let font = NSFontManager.shared.font(withFamily: fontFamily, traits: [], weight: 5, size: size) {
+            return font
+        }
+        return systemMonospace && fontFamily.isEmpty
+            ? .monospacedSystemFont(ofSize: size, weight: .regular)
+            : .systemFont(ofSize: size, weight: .regular)
+    }
+    static func toggleSystemMonospace() {
+        guard fontFamily.isEmpty else { return }
+        systemMonospace.toggle()
+    }
+    static func restoreDefaults() {
+        for key in ["noteFontSize", "noteFontFamily", "noteSystemMonospace"] { UserDefaults.standard.removeObject(forKey: key) }
+        updateEditors()
+    }
+    private static func updateEditors() {
+        for window in NSApp.windows {
+            (window.windowController as? EditorWindowController)?.editor.setFontSize(fontSize)
+        }
+        NotificationCenter.default.post(name: fontDidChange, object: nil)
+    }
 }
 
 final class NoteTextView: NSTextView {
     weak var note: NoteDocument?
     private var pointerTrackingArea: NSTrackingArea?
     override var undoManager: UndoManager? { note?.undoManager }
+
+    override func insertNewline(_ sender: Any?) {
+        guard isEditable, !hasMarkedText(), selectedRanges.count == 1 else {
+            super.insertNewline(sender)
+            return
+        }
+        let text = string as NSString
+        let selection = selectedRange()
+        guard selection.location != NSNotFound, NSMaxRange(selection) <= text.length else { return }
+        let lineStart = text.lineRange(for: NSRange(location: selection.location, length: 0)).location
+        var indentationEnd = lineStart
+        // Only copy leading tabs before the insertion point. When splitting
+        // within indentation, the remaining tabs already follow the new line.
+        while indentationEnd < selection.location, text.character(at: indentationEnd) == 9 {
+            indentationEnd += 1
+        }
+        guard indentationEnd > lineStart else {
+            super.insertNewline(sender)
+            return
+        }
+        let tabs = text.substring(with: NSRange(location: lineStart, length: indentationEnd - lineStart))
+        insertText("\n" + tabs, replacementRange: selection)
+    }
 
     override func resetCursorRects() {
         addCursorRect(visibleRect, cursor: .arrow)
@@ -87,13 +152,23 @@ final class NoteTextView: NSTextView {
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        guard flag else {
+            super.drawInsertionPoint(in: rect, color: color, turnedOn: false)
+            return
+        }
         // The line fragment includes paragraph spacing (and a taller empty-line
         // fragment). The caret should only use the regular font's height.
         let font = self.font ?? NSFont.systemFont(ofSize: EditorMetrics.defaultFontSize, weight: .regular)
         var caret = rect
         caret.size = NSSize(width: 1, height: ceil(font.ascender - font.descender))
         caret.origin.x = round(caret.origin.x * (window?.backingScaleFactor ?? 2)) / (window?.backingScaleFactor ?? 2)
-        super.drawInsertionPoint(in: caret, color: color, turnedOn: flag)
+        // AppKit only invalidates the original rectangle when the caret moves.
+        // Font-height rounding and pixel alignment must never draw beyond it,
+        // or the uncovered pixels can remain as a dot after typing.
+        NSGraphicsContext.saveGraphicsState()
+        rect.clip()
+        super.drawInsertionPoint(in: caret.intersection(rect), color: color, turnedOn: true)
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
@@ -144,7 +219,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.lineFragmentPadding = 0
-        textView.font = .systemFont(ofSize: fontSize, weight: .regular)
+        textView.font = EditorSession.font(ofSize: fontSize)
         textView.textColor = NSColor(white: 0.22, alpha: 1)
         textView.insertionPointColor = .textColor
         textView.backgroundColor = .white
@@ -162,7 +237,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 5
         textView.defaultParagraphStyle = paragraph
-        textView.typingAttributes = [.font: NSFont.systemFont(ofSize: fontSize), .paragraphStyle: paragraph,
+        textView.typingAttributes = [.font: EditorSession.font(ofSize: fontSize), .paragraphStyle: paragraph,
                                      .foregroundColor: NSColor(white: 0.22, alpha: 1)]
         textView.delegate = self
         textObserver = NotificationCenter.default.addObserver(
@@ -191,7 +266,8 @@ final class EditorView: NSView, NSTextViewDelegate {
         filenameLabel.cell?.usesSingleLineMode = true
         filenameLabel.isHidden = true
         filenameLabel.renameOnClick = true
-        filenameLabel.hidesTextExtension = true
+        filenameLabel.onEditingBegan = { [weak self] in self?.layoutFilename() }
+        filenameLabel.onEditingEnded = { [weak self] in self?.layoutFilename() }
         addSubview(filenameLabel)
         filenameDivider.wantsLayer = true
         filenameDivider.layer?.backgroundColor = NSColor(white: 0.72, alpha: 1).cgColor
@@ -217,7 +293,6 @@ final class EditorView: NSView, NSTextViewDelegate {
     }
 
     func setFontSize(_ size: CGFloat) {
-        guard fontSize != size else { return }
         fontSize = size
         applyFontSize()
     }
@@ -234,7 +309,7 @@ final class EditorView: NSView, NSTextViewDelegate {
     }
 
     private func applyFontSize() {
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .regular)
+        let font = EditorSession.font(ofSize: fontSize)
         textView.font = font
         var attributes = textView.typingAttributes
         attributes[.font] = font
@@ -266,7 +341,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         titlebarBackdrop.frame = NSRect(x: bounds.minX, y: bounds.maxY - EditorMetrics.titlebarHeight,
                                         width: bounds.width, height: EditorMetrics.titlebarHeight)
         layoutFilename()
-        let filenameX = sidebarVisible ? EditorMetrics.filenameSidebarInset : EditorMetrics.filenameLeadingInset
+        let filenameX = filenameLeadingInset
         // Reserve the maximum title width even for short names or unsaved notes,
         // keeping this breakpoint stable when switching or saving documents.
         titlebarBackdrop.isHidden = textView.textContainerInset.width > filenameX + EditorMetrics.filenameMaxWidth
@@ -281,9 +356,17 @@ final class EditorView: NSView, NSTextViewDelegate {
         layoutFilename()
     }
 
+    private var filenameLeadingInset: CGFloat {
+        if sidebarVisible { return EditorMetrics.filenameSidebarInset }
+        guard let button = (window as? NoteWindow)?.noteButtons.last else {
+            return EditorMetrics.filenameLeadingInset
+        }
+        return convert(button.bounds, from: button).maxX + EditorMetrics.filenameButtonSpacing
+    }
+
     func layoutFilename() {
         guard let parent = filenameLabel.superview else { return }
-        let filenameX = sidebarVisible ? EditorMetrics.filenameSidebarInset : EditorMetrics.filenameLeadingInset
+        let filenameX = filenameLeadingInset
         let labelHeight = ceil(filenameLabel.intrinsicContentSize.height)
         let frame = convert(NSRect(x: filenameX,
                                    y: bounds.maxY - EditorMetrics.titlebarHeight / 2 - labelHeight / 2,
@@ -355,17 +438,16 @@ final class EditorView: NSView, NSTextViewDelegate {
 
 final class InlineFilenameField: NSTextField, NSTextFieldDelegate {
     var renameOnClick = false
-    var hidesTextExtension = false
     private var fullFilename: String?
     var onCommit: ((String) -> Bool)?
+    var onEditingBegan: (() -> Void)?
     var onEditingEnded: (() -> Void)?
     private(set) var isRenaming = false
     private var originalName = ""
 
     func setFilename(_ name: String) {
         fullFilename = name
-        stringValue = hidesTextExtension && (name as NSString).pathExtension.lowercased() == "txt"
-            ? (name as NSString).deletingPathExtension : name
+        stringValue = name
     }
 
     override var mouseDownCanMoveWindow: Bool { false }
@@ -388,6 +470,10 @@ final class InlineFilenameField: NSTextField, NSTextFieldDelegate {
         drawsBackground = true
         backgroundColor = .textBackgroundColor
         lineBreakMode = .byClipping
+        // A bordered editing field is taller than the label. Lay it out before
+        // AppKit creates the field editor, so the text is not clipped or offset.
+        invalidateIntrinsicContentSize()
+        onEditingBegan?()
         selectText(nil)
         let stem = (originalName as NSString).deletingPathExtension
         (currentEditor() as? NSTextView)?.setSelectedRange(NSRange(location: 0, length: (stem as NSString).length))
@@ -409,9 +495,10 @@ final class InlineFilenameField: NSTextField, NSTextFieldDelegate {
         isBezeled = false
         drawsBackground = false
         lineBreakMode = .byTruncatingMiddle
+        invalidateIntrinsicContentSize()
         setFilename(originalName)
         if commit, proposed != originalName, onCommit?(proposed) == true {
-            setFilename((proposed as NSString).pathExtension.isEmpty ? proposed + ".txt" : proposed)
+            setFilename(proposed)
         }
         onEditingEnded?()
     }
@@ -456,6 +543,7 @@ final class SmoothScrollView: NSScrollView {
         set { super.scrollerStyle = .overlay }
     }
 
+    static let wheelDistanceMultiplier: CGFloat = 4
     private var wheelDisplayLink: CADisplayLink?
     private lazy var animationDriver = WheelAnimationDriver(scrollView: self)
     private var wheelTarget: CGFloat = 0
@@ -485,7 +573,7 @@ final class SmoothScrollView: NSScrollView {
             previousPosition = current
         }
         // NSScrollView interprets a coarse delta in line units, not pixels.
-        let distance = -event.scrollingDeltaY * verticalLineScroll
+        let distance = -event.scrollingDeltaY * verticalLineScroll * Self.wheelDistanceMultiplier
         if (wheelTarget - current) * distance < 0 {
             wheelTarget = current
             wheelPosition = current

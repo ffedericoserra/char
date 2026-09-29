@@ -10,12 +10,15 @@ struct FolderEntry: Sendable {
             at: url, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]
         ).compactMap { child in
             let values = try child.resourceValues(forKeys: keys)
+            if values.isSymbolicLink == true,
+               (try? child.resolvingSymlinksInPath().resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                return nil
+            }
             // Don't traverse packages or directory symlinks (which may form cycles).
             if values.isDirectory == true {
                 guard values.isPackage != true, values.isSymbolicLink != true else { return nil }
                 return FolderEntry(url: child, isDirectory: true)
             }
-            guard child.pathExtension.lowercased() == "txt" else { return nil }
             return FolderEntry(url: child, isDirectory: false)
         }.sorted {
             if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
@@ -104,6 +107,10 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         title.textColor = .secondaryLabelColor
         title.lineBreakMode = .byTruncatingMiddle
         title.setAccessibilityIdentifier("Folder name")
+        let changeFolder = NSClickGestureRecognizer(target: self, action: #selector(chooseFolder))
+        changeFolder.numberOfClicksRequired = 2
+        title.addGestureRecognizer(changeFolder)
+        title.setAccessibilityHelp("Double-click to open a different folder.")
         message.font = .systemFont(ofSize: 12)
         message.textColor = .secondaryLabelColor
         message.alignment = .center
@@ -199,7 +206,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     private var clipboardFiles: [URL] {
         (NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? [])
-            .filter { $0.pathExtension.lowercased() == "txt" }
+            .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
     }
 
     private func copyFile(_ url: URL) {
@@ -447,7 +454,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         openButton.isHidden = folderURL != nil
         if folderURL == nil { message.stringValue = "Open a folder to browse your notes." }
         else if root?.children == nil { message.stringValue = "Opening folder…" }
-        else { message.stringValue = "No text files in this folder yet." }
+        else { message.stringValue = "No files in this folder yet." }
     }
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
