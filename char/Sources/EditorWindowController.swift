@@ -128,7 +128,7 @@ final class NoteWindow: NSWindow {
         let nativeButtons = [ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { standardWindowButton($0) }
         for (index, (button, x)) in zip(nativeButtons + noteButtons, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
             guard let parent = button.superview else { continue }
-            let upwardOffset: CGFloat = index == 4 ? 1 : 0
+            let upwardOffset: CGFloat = index == 4 ? 2 : 0
             let center = parent.convert(NSPoint(x: x, y: frame.height - 24 + upwardOffset), from: nil)
             let origin = NSPoint(x: center.x - button.frame.width / 2, y: center.y - button.frame.height / 2)
             if button.frame.origin != origin { button.setFrameOrigin(origin) }
