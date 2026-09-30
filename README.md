@@ -1,16 +1,12 @@
 # char
 
-Minimal native macOS text editor.
+char is a macOS text editor. Born with immediacy of use and lack of visual disraction in mind.
 
 ## Run
 
-Open `char.xcodeproj` in Xcode, select **char**, and press **Run**.
-
-Or build a standalone app:
+To build a standalone app:
 
 ```sh
 ./scripts/build.sh
 open build/char.app
 ```
-
-The release build produces a universal app for Apple silicon and Intel. It is locally signed for development; distribution signing and notarization are not configured.
