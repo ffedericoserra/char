@@ -18,7 +18,7 @@ enum EditorMetrics {
 
 @MainActor
 enum EditorSession {
-    static let fontDidChange = Notification.Name("ThinkNoteFontDidChange")
+    static let fontDidChange = Notification.Name("charNoteFontDidChange")
     static var fontSize: CGFloat {
         get {
             let value = UserDefaults.standard.double(forKey: "noteFontSize")

@@ -1,6 +1,6 @@
 import XCTest
 import AppKit
-@testable import Think
+@testable import char
 
 private final class DiscreteWheelEvent: NSEvent {
     var step: CGFloat = -6

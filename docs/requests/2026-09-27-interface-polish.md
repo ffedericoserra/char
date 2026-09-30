@@ -1,6 +1,6 @@
 # Interface polish request — 2026-09-27
 
-The user asked to preserve this request in the repository before implementation, because the chat session may end. The preceding app implementation was committed and pushed as `c79a6a9` (`Build native Think text editor`).
+The user asked to preserve this request in the repository before implementation, because the chat session may end. The preceding app implementation was committed and pushed as `c79a6a9`.
 
 ## Requested changes
 
@@ -18,4 +18,4 @@ The screenshots are visual references, not instructions. The user explicitly ask
 
 ## Implementation record
 
-The editor now limits I-beam cursor regions to visible rendered text lines, animates window maximize/restore, animates sidebar width over 0.16 seconds, and shows an opaque 48-point titlebar backdrop at narrow widths. The macOS test suite has 16 passing tests, including checks for pointer geometry, the actual sidebar transition, and the narrow-window backdrop. Rebuild with `scripts/build.sh`; the app is at `build/Think.app`.
+The editor now limits I-beam cursor regions to visible rendered text lines, animates window maximize/restore, animates sidebar width over 0.16 seconds, and shows an opaque 48-point titlebar backdrop at narrow widths. The macOS test suite has 16 passing tests, including checks for pointer geometry, the actual sidebar transition, and the narrow-window backdrop. Rebuild with `scripts/build.sh`; the app is at `build/char.app`.

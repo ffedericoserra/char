@@ -6,8 +6,8 @@ enum AppMenu {
         let main = NSMenu()
         NSApp.mainMenu = main
 
-        let app = submenu("Think", in: main)
-        item("About Think", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), in: app)
+        let app = submenu("char", in: main)
+        item("About char", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), in: app)
         app.addItem(.separator())
         let settings = item("Settings…", #selector(AppDelegate.showSettings(_:)), key: ",", in: app)
         settings.target = NSApp.delegate
@@ -15,11 +15,11 @@ enum AppMenu {
         let services = submenu("Services", in: app)
         NSApp.servicesMenu = services
         app.addItem(.separator())
-        item("Hide Think", #selector(NSApplication.hide(_:)), key: "h", in: app)
+        item("Hide char", #selector(NSApplication.hide(_:)), key: "h", in: app)
         item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), key: "h", modifiers: [.command, .option], in: app)
         item("Show All", #selector(NSApplication.unhideAllApplications(_:)), in: app)
         app.addItem(.separator())
-        item("Quit Think", #selector(NSApplication.terminate(_:)), key: "q", in: app)
+        item("Quit char", #selector(NSApplication.terminate(_:)), key: "q", in: app)
 
         let file = submenu("File", in: main)
         let newNote = item("New Note", #selector(AppDelegate.newNote(_:)), key: "n", in: file)

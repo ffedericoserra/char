@@ -1,16 +1,16 @@
-# Think
+# char
 
 Minimal native macOS text editor.
 
 ## Run
 
-Open `Think.xcodeproj` in Xcode, select **Think**, and press **Run**.
+Open `char.xcodeproj` in Xcode, select **char**, and press **Run**.
 
 Or build a standalone app:
 
 ```sh
 ./scripts/build.sh
-open build/Think.app
+open build/char.app
 ```
 
 The release build produces a universal app for Apple silicon and Intel. It is locally signed for development; distribution signing and notarization are not configured.

@@ -1,4 +1,4 @@
-# Think app icon
+# char app icon
 
 Generated with the built-in image generation tool using the user's supplied pen and exclamation-mark reference.
 
