@@ -1,8 +1,22 @@
 import AppKit
+import UniformTypeIdentifiers
 
 struct FolderEntry: Sendable {
     let url: URL
     let isDirectory: Bool
+
+    var opensOnSelection: Bool {
+        guard !isDirectory else { return false }
+        // Some formats (including PDFs) can contain valid UTF-8 without being
+        // editable text. Unknown extensions still use our lossless decoder.
+        if let type = UTType(filenameExtension: url.pathExtension),
+           !type.conforms(to: .text),
+           [UTType.pdf, .image, .audiovisualContent, .archive, .executable].contains(where: { type.conforms(to: $0) }) {
+            return false
+        }
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return false }
+        return (try? PlainText.decode(data)) != nil
+    }
 
     static func contents(of url: URL) throws -> [FolderEntry] {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey]
@@ -133,7 +147,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         outline.dataSource = self
         outline.delegate = self
         outline.target = self
-        outline.doubleAction = #selector(renameClickedFile)
+        outline.doubleAction = #selector(doubleClickItem)
         outline.renameSelection = { [weak self] in self?.renameSelectedFile() }
         outline.trashSelection = { [weak self] in
             guard let self, let url = self.fileURL(at: self.outline.selectedRow) else { return }
@@ -194,8 +208,13 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         return node.entry.url
     }
 
-    @objc private func renameClickedFile() {
-        beginRename(at: outline.clickedRow)
+    @objc private func doubleClickItem() {
+        guard let node = outline.item(atRow: outline.clickedRow) as? FolderNode else { return }
+        if !node.entry.isDirectory && !node.entry.opensOnSelection {
+            NSWorkspace.shared.open(node.entry.url)
+        } else {
+            beginRename(at: outline.clickedRow)
+        }
     }
 
     private func renameSelectedFile() {
@@ -559,7 +578,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !updatingSelection,
               let node = outline.item(atRow: outline.selectedRow) as? FolderNode,
-              !node.entry.isDirectory else { return }
+              node.entry.opensOnSelection else { return }
         onSelectFile?(node.entry.url)
     }
 

@@ -267,6 +267,10 @@ final class EditorView: NSView, NSTextViewDelegate {
         textView.setAccessibilityLabel("Note text")
         scrollView.documentView = textView
         scrollView.documentCursor = .arrow
+        scrollView.onFindBarVisibilityChanged = { [weak self] in
+            self?.needsLayout = true
+            self?.layoutSubtreeIfNeeded()
+        }
         addSubview(scrollView)
         addSubview(topEdge)
         addSubview(bottomEdge)
@@ -334,7 +338,13 @@ final class EditorView: NSView, NSTextViewDelegate {
 
     override func layout() {
         super.layout()
-        scrollView.frame = bounds
+        // The native find bar belongs to the scroll view. Keep its entire
+        // viewport below the custom titlebar while searching.
+        var scrollFrame = bounds
+        if scrollView.isFindBarVisible {
+            scrollFrame.size.height = max(0, scrollFrame.height - EditorMetrics.titlebarHeight)
+        }
+        scrollView.frame = scrollFrame
         let viewport = scrollView.contentSize
         let bottomInset = max(viewport.height / 2, 6 * textView.writingLineHeight + EditorMetrics.edgeHeight)
         let inset = max(EditorMetrics.minimumSideInset, (viewport.width - EditorMetrics.columnWidth) / 2)
@@ -361,7 +371,8 @@ final class EditorView: NSView, NSTextViewDelegate {
         let filenameX = filenameLeadingInset
         // Reserve the maximum title width even for short names or unsaved notes,
         // keeping this breakpoint stable when switching or saving documents.
-        titlebarBackdrop.isHidden = textView.textContainerInset.width > filenameX + EditorMetrics.filenameMaxWidth
+        titlebarBackdrop.isHidden = !scrollView.isFindBarVisible
+            && textView.textContainerInset.width > filenameX + EditorMetrics.filenameMaxWidth
         updateEdges()
     }
 
@@ -554,6 +565,14 @@ final class TitlebarBackdropView: NSView {
 /// Trackpads already supply precise deltas and momentum. Only coarse mouse
 /// wheel events need interpolation between their otherwise abrupt jumps.
 final class SmoothScrollView: NSScrollView {
+    var onFindBarVisibilityChanged: (() -> Void)?
+
+    override var isFindBarVisible: Bool {
+        didSet {
+            if isFindBarVisible != oldValue { onFindBarVisibilityChanged?() }
+        }
+    }
+
     // Keep the thumb over the content, even when macOS prefers legacy
     // scrollers for a connected mouse. No reserved track or right-hand gutter.
     override var scrollerStyle: NSScroller.Style {

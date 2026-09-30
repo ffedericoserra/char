@@ -50,6 +50,27 @@ final class PlainTextTests: XCTestCase {
         XCTAssertEqual(entries.map(\.url.lastPathComponent), ["Journal", "config.json", "image.png", "note2.txt", "note10.txt", "README", "UPPER.TXT"])
         XCTAssertTrue(entries[0].isDirectory)
     }
+
+    func testSidebarOnlyOpensTextOnSelection() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let samples: [(String, Data, Bool)] = [
+            ("README", Data("Notes".utf8), true),
+            ("note.custom", Data("Caffè".utf8), true),
+            ("empty.txt", Data(), true),
+            ("unicode.txt", Data([0xFF, 0xFE, 0x41, 0x00]), true),
+            ("binary.txt", Data([0, 1, 2, 3]), false),
+            ("file.pdf", Data("%PDF-1.4\n%%EOF".utf8), false),
+            ("image.png", Data([0x89, 0x50, 0x4E, 0x47]), false)
+        ]
+        for (name, data, expected) in samples {
+            let url = directory.appendingPathComponent(name)
+            try data.write(to: url)
+            XCTAssertEqual(FolderEntry(url: url, isDirectory: false).opensOnSelection, expected, name)
+        }
+        XCTAssertFalse(FolderEntry(url: directory, isDirectory: true).opensOnSelection)
+    }
 }
 
 @MainActor
@@ -805,6 +826,33 @@ final class DocumentTests: XCTestCase {
         XCTAssertFalse(backdrop.isHidden, "The backdrop now protects the maximum filename width too")
         window.setContentSize(NSSize(width: 1600, height: 800))
         window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertTrue(backdrop.isHidden)
+    }
+
+    func testFindBarStaysBelowOpaqueTitlebar() throws {
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        let editor = controller.editor
+        let backdrop = try XCTUnwrap(editor.subviews.first { $0 is TitlebarBackdropView })
+        window.setContentSize(NSSize(width: 1600, height: 800))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertTrue(backdrop.isHidden)
+
+        editor.scrollView.isFindBarVisible = true
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.scrollView.frame.maxY, backdrop.frame.minY)
+        XCTAssertFalse(backdrop.isHidden)
+        XCTAssertTrue(backdrop.isOpaque)
+
+        window.setContentSize(NSSize(width: 1000, height: 600))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.scrollView.frame.maxY, backdrop.frame.minY)
+
+        editor.scrollView.isFindBarVisible = false
+        window.setContentSize(NSSize(width: 1600, height: 800))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.scrollView.frame, editor.bounds)
         XCTAssertTrue(backdrop.isHidden)
     }
 
