@@ -75,6 +75,41 @@ final class PlainTextTests: XCTestCase {
 
 @MainActor
 final class DocumentTests: XCTestCase {
+    func testThemeShortcutUpdatesWindowsWithoutEditingDocuments() throws {
+        let original = UserDefaults.standard.object(forKey: "darkTheme")
+        defer {
+            if let original { UserDefaults.standard.set(original, forKey: "darkTheme") }
+            else { UserDefaults.standard.removeObject(forKey: "darkTheme") }
+            AppTheme.apply()
+        }
+        UserDefaults.standard.set(false, forKey: "darkTheme")
+        AppTheme.apply()
+        let note = NoteDocument()
+        note.text = "Theme switching preserves text"
+        note.makeWindowControllers()
+        defer { note.close() }
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        controller.showWindow(nil)
+        let window = try XCTUnwrap(controller.window)
+        let split = try XCTUnwrap(window.contentView as? NSSplitView)
+        let sidebar = try XCTUnwrap(split.arrangedSubviews.first as? FolderBrowser)
+        let sidebarScroll = try XCTUnwrap(sidebar.subviews.first { $0 is NSScrollView } as? NSScrollView)
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [.command, .shift], timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, characters: "D", charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2))
+        for dark in [true, false] {
+            XCTAssertTrue(split.performKeyEquivalent(with: event))
+            XCTAssertEqual(AppTheme.isDark, dark)
+            let palette = dark ? ThemePalette.dark : ThemePalette.light
+            XCTAssertEqual(controller.editor.textView.backgroundColor, palette.editorBackground)
+            XCTAssertEqual(controller.editor.textView.textColor, palette.text)
+            XCTAssertEqual(sidebarScroll.backgroundColor, palette.sidebarBackground)
+            XCTAssertEqual(note.text, "Theme switching preserves text")
+            XCTAssertFalse(note.isDocumentEdited)
+            XCTAssertEqual(NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), dark ? .darkAqua : .aqua)
+        }
+    }
+
     func testFileStatusTracksExistenceAndEdits() throws {
         let note = NoteDocument()
         note.makeWindowControllers()
@@ -84,7 +119,11 @@ final class DocumentTests: XCTestCase {
         let button = try XCTUnwrap(status.arrangedSubviews.first as? NSButton)
         let label = try XCTUnwrap(status.arrangedSubviews.last as? NSTextField)
         XCTAssertTrue(button.isHidden)
+        XCTAssertTrue(label.isHidden)
+        controller.editor.textView.string = "Draft"
         XCTAssertFalse(label.isHidden)
+        controller.editor.textView.string = ""
+        XCTAssertTrue(label.isHidden)
         XCTAssertEqual(label.stringValue, "Unsaved")
 
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")

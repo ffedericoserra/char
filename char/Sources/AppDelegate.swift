@@ -12,10 +12,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func toggleSystemMonospace(_ sender: Any?) { EditorSession.toggleSystemMonospace() }
 
+    @objc func toggleDarkTheme(_ sender: Any?) { AppTheme.toggle() }
+
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleSystemMonospace(_:)) {
             item.state = EditorSession.systemMonospace && EditorSession.fontFamily.isEmpty ? .on : .off
             return EditorSession.fontFamily.isEmpty
+        }
+        if item.action == #selector(toggleDarkTheme(_:)) {
+            item.state = AppTheme.isDark ? .on : .off
         }
         return true
     }
@@ -25,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationWillFinishLaunching(_ notification: Notification) {
         documentController = FileDocumentController()
         NSWindow.allowsAutomaticWindowTabbing = false
-        NSApp.appearance = NSAppearance(named: .aqua)
+        AppTheme.apply()
         AppMenu.install()
     }
 

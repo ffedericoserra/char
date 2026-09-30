@@ -6,6 +6,11 @@ private final class SidebarSplitView: NSSplitView {
         // NSTextView can consume Command-B as a formatting shortcut before
         // the main menu sees it, even though this editor is plain text.
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if event.type == .keyDown, modifiers == [.command, .shift],
+           event.charactersIgnoringModifiers?.lowercased() == "d" {
+            AppTheme.toggle()
+            return true
+        }
         if event.type == .keyDown, modifiers == .command,
            event.charactersIgnoringModifiers?.lowercased() == "b",
            let window, window.attachedSheet == nil,
@@ -17,7 +22,7 @@ private final class SidebarSplitView: NSSplitView {
     }
 
     override func drawDivider(in rect: NSRect) {
-        NSColor(calibratedWhite: 0.88, alpha: 1).setFill()
+        AppTheme.palette.divider.setFill()
         rect.fill()
     }
 }
@@ -160,7 +165,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         window.title = "Untitled"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.backgroundColor = .white
+        window.backgroundColor = AppTheme.palette.editorBackground
         window.isOpaque = true
         window.hasShadow = true
         window.isReleasedWhenClosed = false
@@ -191,6 +196,16 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         sidebar.onFilesChanged = { [weak self] in self?.refreshFileBrowsers() }
         sidebar.onNewFile = { [weak self] in self?.createFile() }
         editor.onRenameFile = { [weak self] url, name in self?.renameFile(url, to: name) ?? false }
+    }
+
+    func applyTheme() {
+        window?.backgroundColor = AppTheme.palette.editorBackground
+        editor.applyTheme()
+        sidebar.applyTheme()
+        splitView.needsDisplay = true
+        for button in (window as? NoteWindow)?.noteButtons ?? [] {
+            button.contentTintColor = AppTheme.palette.icons
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -546,7 +561,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         button.isBordered = false
         button.imageScaling = .scaleProportionallyDown
         button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-        button.contentTintColor = .secondaryLabelColor
+        button.contentTintColor = AppTheme.palette.icons
         button.setAccessibilityLabel(label)
         return button
     }

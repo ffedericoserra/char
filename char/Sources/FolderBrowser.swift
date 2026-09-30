@@ -90,7 +90,7 @@ private final class FolderOutlineView: NSOutlineView, NSMenuItemValidation {
 }
 
 final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
-    private let backgroundColor = NSColor(calibratedWhite: 0.965, alpha: 1)
+    private var backgroundColor: NSColor { AppTheme.palette.sidebarBackground }
     var onSelectFile: ((URL) -> Void)?
     var onOpenFolder: (() -> Void)?
     var onRenameFile: ((URL, String) -> Bool)?
@@ -118,7 +118,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         layer?.backgroundColor = backgroundColor.cgColor
 
         title.font = .systemFont(ofSize: 12, weight: .medium)
-        title.textColor = .secondaryLabelColor
+        title.textColor = AppTheme.palette.secondaryText
         title.lineBreakMode = .byTruncatingMiddle
         title.setAccessibilityIdentifier("Folder name")
         let changeFolder = NSClickGestureRecognizer(target: self, action: #selector(chooseFolder))
@@ -126,7 +126,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         title.addGestureRecognizer(changeFolder)
         title.setAccessibilityHelp("Double-click to open a different folder.")
         message.font = .systemFont(ofSize: 12)
-        message.textColor = .secondaryLabelColor
+        message.textColor = AppTheme.palette.secondaryText
         message.alignment = .center
         openButton.bezelStyle = .rounded
         openButton.controlSize = .small
@@ -177,6 +177,21 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         scroll.automaticallyAdjustsContentInsets = false
         [scroll, title, message, openButton].forEach(addSubview)
         updateEmptyState()
+    }
+
+    func applyTheme() {
+        layer?.backgroundColor = backgroundColor.cgColor
+        outline.backgroundColor = backgroundColor
+        scroll.backgroundColor = backgroundColor
+        title.textColor = AppTheme.palette.secondaryText
+        message.textColor = AppTheme.palette.secondaryText
+        // Restyle existing rows without reloading selection or ending a rename.
+        for row in 0..<outline.numberOfRows {
+            guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? NSTableCellView else { continue }
+            cell.imageView?.contentTintColor = AppTheme.palette.icons
+            cell.textField?.textColor = AppTheme.palette.sidebarText
+            cell.textField?.font = AppTheme.palette.sidebarFont
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -549,13 +564,14 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         let cell = NSTableCellView()
         let icon = NSImageView()
         icon.image = NSImage(systemSymbolName: node.entry.isDirectory ? "folder" : "doc.text", accessibilityDescription: nil)
-        icon.contentTintColor = .tertiaryLabelColor
+        icon.contentTintColor = AppTheme.palette.icons
         let label = InlineFilenameField(labelWithString: node.entry.url.lastPathComponent)
         label.selectsFilenameStem = !node.entry.isDirectory
         label.onCommit = { [weak self] name in
             self?.onRenameFile?(node.entry.url, name) ?? false
         }
-        label.font = .systemFont(ofSize: 13)
+        label.font = AppTheme.palette.sidebarFont
+        label.textColor = AppTheme.palette.sidebarText
         label.lineBreakMode = .byTruncatingMiddle
         cell.imageView = icon
         cell.textField = label

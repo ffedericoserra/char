@@ -38,8 +38,9 @@ enum EditorSession {
         set { UserDefaults.standard.set(newValue, forKey: "noteSystemMonospace"); updateEditors() }
     }
     static func font(ofSize size: CGFloat) -> NSFont {
-        if !fontFamily.isEmpty,
-           let font = NSFontManager.shared.font(withFamily: fontFamily, traits: [], weight: 5, size: size) {
+        let family = fontFamily.isEmpty ? AppTheme.palette.editorFontFamily : fontFamily
+        if !family.isEmpty,
+           let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: size) {
             return font
         }
         return systemMonospace && fontFamily.isEmpty
@@ -209,16 +210,16 @@ final class EditorView: NSView, NSTextViewDelegate {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.white.cgColor
+        layer?.backgroundColor = AppTheme.palette.editorBackground.cgColor
 
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = .white
+        scrollView.backgroundColor = AppTheme.palette.editorBackground
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
-        scrollView.scrollerKnobStyle = .dark
+        scrollView.scrollerKnobStyle = AppTheme.isDark ? .light : .dark
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = .init()
 
@@ -235,9 +236,9 @@ final class EditorView: NSView, NSTextViewDelegate {
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.lineFragmentPadding = 0
         textView.font = EditorSession.font(ofSize: fontSize)
-        textView.textColor = NSColor(white: 0.22, alpha: 1)
-        textView.insertionPointColor = .textColor
-        textView.backgroundColor = .white
+        textView.textColor = AppTheme.palette.text
+        textView.insertionPointColor = AppTheme.palette.text
+        textView.backgroundColor = AppTheme.palette.editorBackground
         textView.drawsBackground = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -253,7 +254,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         paragraph.lineSpacing = 5
         textView.defaultParagraphStyle = paragraph
         textView.typingAttributes = [.font: EditorSession.font(ofSize: fontSize), .paragraphStyle: paragraph,
-                                     .foregroundColor: NSColor(white: 0.22, alpha: 1)]
+                                     .foregroundColor: AppTheme.palette.text]
         textView.delegate = self
         textObserver = NotificationCenter.default.addObserver(
             forName: NSTextStorage.didProcessEditingNotification, object: textView.textStorage, queue: .main
@@ -264,6 +265,7 @@ final class EditorView: NSView, NSTextViewDelegate {
                 // Text storage also reports undo/redo edits, before NSTextView's
                 // deferred change notification. Keep saving in sync immediately.
                 self.textView.note?.text = storage.string
+                self.updateFileStatus()
                 self.textView.window?.invalidateCursorRects(for: self.textView)
             }
         }
@@ -278,8 +280,8 @@ final class EditorView: NSView, NSTextViewDelegate {
         addSubview(topEdge)
         addSubview(bottomEdge)
         addSubview(titlebarBackdrop)
-        filenameLabel.font = .systemFont(ofSize: EditorMetrics.defaultFontSize, weight: .bold)
-        filenameLabel.textColor = NSColor(white: 0.05, alpha: 1)
+        filenameLabel.font = AppTheme.palette.titleFont
+        filenameLabel.textColor = AppTheme.palette.text
         filenameLabel.lineBreakMode = .byTruncatingMiddle
         filenameLabel.maximumNumberOfLines = 1
         filenameLabel.cell?.usesSingleLineMode = true
@@ -289,26 +291,26 @@ final class EditorView: NSView, NSTextViewDelegate {
         filenameLabel.onEditingEnded = { [weak self] in self?.layoutFilename() }
         addSubview(filenameLabel)
         filenameDivider.wantsLayer = true
-        filenameDivider.layer?.backgroundColor = NSColor(white: 0.72, alpha: 1).cgColor
+        filenameDivider.layer?.backgroundColor = AppTheme.palette.divider.cgColor
         filenameDivider.isHidden = true
         addSubview(filenameDivider)
 
         revealFileButton.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Reveal in Finder")
         revealFileButton.isBordered = false
         revealFileButton.imagePosition = .imageOnly
-        revealFileButton.contentTintColor = .darkGray
+        revealFileButton.contentTintColor = AppTheme.palette.icons
         revealFileButton.toolTip = "Reveal in Finder"
         revealFileButton.target = self
         revealFileButton.action = #selector(revealCurrentFile)
         revealFileButton.setAccessibilityLabel("Reveal in Finder")
-        unsavedLabel.font = .systemFont(ofSize: 15)
-        unsavedLabel.textColor = .darkGray
+        unsavedLabel.font = AppTheme.palette.statusFont
+        unsavedLabel.textColor = AppTheme.palette.secondaryText
         fileStatus.orientation = .horizontal
         fileStatus.alignment = .centerY
         fileStatus.spacing = 8
         fileStatus.edgeInsets = NSEdgeInsets(top: 3, left: 4, bottom: 3, right: 4)
         fileStatus.wantsLayer = true
-        fileStatus.layer?.backgroundColor = NSColor.white.cgColor
+        fileStatus.layer?.backgroundColor = AppTheme.palette.editorBackground.cgColor
         fileStatus.addArrangedSubview(revealFileButton)
         fileStatus.addArrangedSubview(unsavedLabel)
         fileStatus.translatesAutoresizingMaskIntoConstraints = false
@@ -335,6 +337,30 @@ final class EditorView: NSView, NSTextViewDelegate {
     deinit {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
         if let textObserver { NotificationCenter.default.removeObserver(textObserver) }
+    }
+
+    func applyTheme() {
+        let palette = AppTheme.palette
+        layer?.backgroundColor = palette.editorBackground.cgColor
+        scrollView.backgroundColor = palette.editorBackground
+        scrollView.scrollerKnobStyle = AppTheme.isDark ? .light : .dark
+        textView.backgroundColor = palette.editorBackground
+        textView.textColor = palette.text
+        textView.insertionPointColor = palette.text
+        var attributes = textView.typingAttributes
+        attributes[.foregroundColor] = palette.text
+        textView.typingAttributes = attributes
+        filenameLabel.textColor = palette.text
+        filenameLabel.font = palette.titleFont
+        filenameDivider.layer?.backgroundColor = palette.divider.cgColor
+        revealFileButton.contentTintColor = palette.icons
+        unsavedLabel.textColor = palette.secondaryText
+        unsavedLabel.font = palette.statusFont
+        fileStatus.layer?.backgroundColor = palette.editorBackground.cgColor
+        titlebarBackdrop.needsDisplay = true
+        topEdge.applyTheme()
+        bottomEdge.applyTheme()
+        applyFontSize()
     }
 
     func setFontSize(_ size: CGFloat) {
@@ -451,7 +477,8 @@ final class EditorView: NSView, NSTextViewDelegate {
         let note = textView.note
         let exists = note?.fileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         revealFileButton.isHidden = !exists
-        unsavedLabel.isHidden = note == nil || (exists && note?.isDocumentEdited == false)
+        let isEmptyNewNote = note?.fileURL == nil && note?.text.isEmpty == true
+        unsavedLabel.isHidden = note == nil || isEmptyNewNote || (exists && note?.isDocumentEdited == false)
         fileStatus.isHidden = revealFileButton.isHidden && unsavedLabel.isHidden
         needsLayout = true
     }
@@ -601,9 +628,9 @@ final class TitlebarBackdropView: NSView {
     override var isOpaque: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.white.setFill()
+        AppTheme.palette.editorBackground.setFill()
         bounds.fill()
-        NSColor(white: 0.92, alpha: 1).setFill()
+        AppTheme.palette.divider.setFill()
         NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
     }
 
@@ -744,7 +771,7 @@ final class EdgeSofteningView: NSView {
         effectMask.endPoint = end
         effect.layer?.mask = effectMask
         addSubview(effect)
-        whiteFade.colors = [NSColor.white.cgColor, NSColor.white.withAlphaComponent(0).cgColor]
+        whiteFade.colors = [AppTheme.palette.editorBackground.cgColor, AppTheme.palette.editorBackground.withAlphaComponent(0).cgColor]
         whiteFade.startPoint = start
         whiteFade.endPoint = end
         layer?.addSublayer(whiteFade)
@@ -752,6 +779,14 @@ final class EdgeSofteningView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func applyTheme() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        whiteFade.colors = [AppTheme.palette.editorBackground.cgColor,
+                            AppTheme.palette.editorBackground.withAlphaComponent(0).cgColor]
+        CATransaction.commit()
+    }
 
     override func layout() {
         super.layout()
