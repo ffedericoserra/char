@@ -1,5 +1,9 @@
 import AppKit
 
+private final class SettingsWindow: NSWindow {
+    override func cancelOperation(_ sender: Any?) { close() }
+}
+
 @MainActor
 final class FontSettingsController: NSWindowController {
     private let family = NSPopUpButton()
@@ -7,7 +11,7 @@ final class FontSettingsController: NSWindowController {
     private let mono = NSButton(checkboxWithTitle: "Use system monospace (⌘⇧M)", target: nil, action: nil)
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
+        let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Settings"
         window.isReleasedWhenClosed = false

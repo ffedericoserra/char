@@ -3,14 +3,37 @@ import UniformTypeIdentifiers
 
 @MainActor
 enum NoteFileOperations {
-    static func rename(_ url: URL, to name: String) throws -> URL {
+    private static func validateName(_ name: String) throws {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               name != ".", name != "..", !name.contains("/"), !name.contains(":"),
               !name.contains("\0") else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInvalidFileNameError,
-                          userInfo: [NSLocalizedDescriptionKey: "Enter a valid filename without slashes or colons."])
+                          userInfo: [NSLocalizedDescriptionKey: "Enter a valid name without slashes or colons."])
         }
-        let destination = url.deletingLastPathComponent().appendingPathComponent(name)
+    }
+
+    static func createDirectory(in parent: URL, named name: String) throws -> URL {
+        try validateName(name)
+        let destination = parent.appendingPathComponent(name, isDirectory: true)
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteFileExistsError,
+                          userInfo: [NSFilePathErrorKey: destination.path])
+        }
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+        return destination
+    }
+
+    static func relocatedURL(_ url: URL, from source: URL, to destination: URL) -> URL {
+        let prefix = source.standardizedFileURL.pathComponents
+        let components = url.standardizedFileURL.pathComponents
+        guard components.starts(with: prefix) else { return url }
+        return components.dropFirst(prefix.count).reduce(destination) { $0.appendingPathComponent($1) }
+    }
+
+    static func rename(_ url: URL, to name: String) throws -> URL {
+        try validateName(name)
+        let isDirectory = try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
+        let destination = url.deletingLastPathComponent().appendingPathComponent(name, isDirectory: isDirectory)
         return try move(url, to: destination)
     }
 
@@ -34,12 +57,18 @@ enum NoteFileOperations {
 
     static func move(_ url: URL, to destination: URL) throws -> URL {
         guard destination != url else { return url }
-        let document = NSDocumentController.shared.document(for: url)
+        let documents = NSDocumentController.shared.documents.compactMap { document -> (NSDocument, URL)? in
+            guard let current = document.fileURL else { return nil }
+            let relocated = relocatedURL(current, from: url, to: destination)
+            return relocated != current ? (document, relocated) : nil
+        }
         // Moving the existing file preserves pending edits and the undo history.
         // FileManager refuses to overwrite a different file at the destination.
         try FileManager.default.moveItem(at: url, to: destination)
-        document?.fileURL = destination
-        document?.windowControllers.forEach { $0.synchronizeWindowTitleWithDocumentName() }
+        for (document, relocated) in documents {
+            document.fileURL = relocated
+            document.windowControllers.forEach { $0.synchronizeWindowTitleWithDocumentName() }
+        }
         return destination
     }
 

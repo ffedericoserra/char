@@ -183,6 +183,11 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     @objc private func chooseFolder() { onOpenFolder?() }
 
+    private func itemURL(at row: Int) -> URL? {
+        guard row >= 0 else { return nil }
+        return (outline.item(atRow: row) as? FolderNode)?.entry.url
+    }
+
     private func fileURL(at row: Int) -> URL? {
         guard row >= 0, let node = outline.item(atRow: row) as? FolderNode,
               !node.entry.isDirectory else { return nil }
@@ -242,6 +247,12 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         window?.makeFirstResponder(outline)
         let menu = NSMenu()
         menu.autoenablesItems = false
+        let newFolder = NSMenuItem(title: "New Folder…", action: #selector(createNewFolder(_:)), keyEquivalent: "")
+        newFolder.target = self
+        newFolder.representedObject = pasteDirectory
+        newFolder.isEnabled = pasteDirectory != nil
+        menu.addItem(newFolder)
+        menu.addItem(.separator())
         guard let url = fileURL(at: row) else {
             if row < 0 {
                 let newFile = NSMenuItem(title: "New File…", action: #selector(createNewFile), keyEquivalent: "")
@@ -253,6 +264,10 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
                 reveal.target = self
                 reveal.representedObject = node.entry.url
                 menu.addItem(reveal)
+                let rename = NSMenuItem(title: "Rename…", action: #selector(renameContextFile(_:)), keyEquivalent: "")
+                rename.target = self
+                rename.representedObject = node.entry.url
+                menu.addItem(rename)
                 menu.addItem(.separator())
             }
             let paste = NSMenuItem(title: "Paste", action: #selector(pasteFiles), keyEquivalent: "v")
@@ -287,6 +302,45 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     @objc private func createNewFile() { onNewFile?() }
 
+    @objc private func createNewFolder(_ item: NSMenuItem) {
+        guard let parent = item.representedObject as? URL, let window, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "New Folder"
+        alert.informativeText = "Create a folder in “\(parent.lastPathComponent)”."
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        let name = NSTextField(string: "Untitled Folder")
+        name.frame = NSRect(x: 0, y: 0, width: 300, height: 24)
+        alert.accessoryView = name
+        alert.window.initialFirstResponder = name
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            do {
+                let created = try NoteFileOperations.createDirectory(in: parent, named: name.stringValue)
+                self.revealFile(created)
+                self.onFilesChanged?()
+            } catch { NSApp.presentError(error) }
+        }
+        name.selectText(nil)
+    }
+
+    func relocateFolder(from source: URL, to destination: URL) {
+        guard let folderURL else { return }
+        let relocate = { NoteFileOperations.relocatedURL($0, from: source, to: destination) }
+        let expanded = Set(expandedURLs.map(relocate))
+        let selection = selectedURL.map(relocate)
+        let relocatedRoot = relocate(folderURL)
+        // Invalidate pending reads of old paths, retaining expansion and selection.
+        generation = UUID()
+        self.folderURL = relocatedRoot
+        title.stringValue = relocatedRoot.lastPathComponent
+        title.toolTip = relocatedRoot.path
+        expandedURLs = expanded
+        selectedURL = selection
+        root = FolderNode(FolderEntry(url: relocatedRoot, isDirectory: true))
+        reload()
+    }
+
     private func copyString(_ value: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
@@ -316,7 +370,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     @objc private func renameContextFile(_ item: NSMenuItem) {
         guard let url = item.representedObject as? URL else { return }
-        if let row = (0..<outline.numberOfRows).first(where: { fileURL(at: $0) == url }) {
+        if let row = (0..<outline.numberOfRows).first(where: { itemURL(at: $0) == url }) {
             beginRename(at: row)
         }
     }
@@ -327,7 +381,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     }
 
     private func beginRename(at row: Int) {
-        guard fileURL(at: row) != nil,
+        guard itemURL(at: row) != nil,
               let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView,
               let field = cell.textField as? InlineFilenameField else { return }
         renamingField?.cancelRename()
@@ -478,6 +532,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         icon.image = NSImage(systemSymbolName: node.entry.isDirectory ? "folder" : "doc.text", accessibilityDescription: nil)
         icon.contentTintColor = .tertiaryLabelColor
         let label = InlineFilenameField(labelWithString: node.entry.url.lastPathComponent)
+        label.selectsFilenameStem = !node.entry.isDirectory
         label.onCommit = { [weak self] name in
             self?.onRenameFile?(node.entry.url, name) ?? false
         }

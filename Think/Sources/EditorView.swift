@@ -67,6 +67,18 @@ final class NoteTextView: NSTextView {
     private var pointerTrackingArea: NSTrackingArea?
     override var undoManager: UndoManager? { note?.undoManager }
 
+    // NSTextView sizes its document with twice the vertical inset. Keep the
+    // writing origin fixed while reserving a larger, asymmetric bottom margin.
+    override var textContainerOrigin: NSPoint {
+        NSPoint(x: super.textContainerOrigin.x, y: EditorMetrics.verticalInset)
+    }
+
+    var writingLineHeight: CGFloat {
+        let font = self.font ?? EditorSession.font(ofSize: EditorMetrics.defaultFontSize)
+        return (layoutManager?.defaultLineHeight(for: font) ?? font.pointSize)
+            + (defaultParagraphStyle?.lineSpacing ?? 0)
+    }
+
     override func insertNewline(_ sender: Any?) {
         guard isEditable, !hasMarkedText(), selectedRanges.count == 1 else {
             super.insertNewline(sender)
@@ -324,15 +336,20 @@ final class EditorView: NSView, NSTextViewDelegate {
         super.layout()
         scrollView.frame = bounds
         let viewport = scrollView.contentSize
+        let bottomInset = max(viewport.height / 2, 6 * textView.writingLineHeight + EditorMetrics.edgeHeight)
+        let inset = max(EditorMetrics.minimumSideInset, (viewport.width - EditorMetrics.columnWidth) / 2)
+        let textInset = NSSize(width: inset, height: (EditorMetrics.verticalInset + bottomInset) / 2)
+        if textView.textContainerInset != textInset {
+            textView.textContainerInset = textInset
+        }
         if lastWidth != viewport.width {
             lastWidth = viewport.width
-            let inset = max(EditorMetrics.minimumSideInset, (viewport.width - EditorMetrics.columnWidth) / 2)
-            textView.textContainerInset = NSSize(width: inset, height: EditorMetrics.verticalInset)
             textView.setFrameSize(NSSize(width: viewport.width, height: max(textView.frame.height, viewport.height)))
             textView.textContainer?.containerSize = NSSize(
                 width: max(1, viewport.width - inset * 2), height: .greatestFiniteMagnitude)
         }
         textView.minSize = NSSize(width: 0, height: viewport.height)
+        textView.sizeToFit()
         let contentFrame = scrollView.contentView.frame
         topEdge.frame = NSRect(x: contentFrame.minX, y: contentFrame.maxY - EditorMetrics.edgeHeight,
                                width: contentFrame.width, height: EditorMetrics.edgeHeight)
@@ -438,6 +455,7 @@ final class EditorView: NSView, NSTextViewDelegate {
 
 final class InlineFilenameField: NSTextField, NSTextFieldDelegate {
     var renameOnClick = false
+    var selectsFilenameStem = true
     private var fullFilename: String?
     var onCommit: ((String) -> Bool)?
     var onEditingBegan: (() -> Void)?
@@ -475,7 +493,7 @@ final class InlineFilenameField: NSTextField, NSTextFieldDelegate {
         invalidateIntrinsicContentSize()
         onEditingBegan?()
         selectText(nil)
-        let stem = (originalName as NSString).deletingPathExtension
+        let stem = selectsFilenameStem ? (originalName as NSString).deletingPathExtension : originalName
         (currentEditor() as? NSTextView)?.setSelectedRange(NSRange(location: 0, length: (stem as NSString).length))
     }
 

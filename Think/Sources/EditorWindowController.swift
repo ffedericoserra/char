@@ -227,7 +227,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     private func renameFile(_ url: URL, to name: String) -> Bool {
         guard window?.attachedSheet == nil, pendingURL == nil, !creatingNewNote else { return false }
         do {
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
             let destination = try NoteFileOperations.rename(url, to: name)
+            if isDirectory {
+                for window in NSApp.windows {
+                    (window.windowController as? EditorWindowController)?.sidebar.relocateFolder(from: url, to: destination)
+                }
+            }
             sidebar.selectFile(destination)
             refreshFileBrowsers()
             return true
