@@ -195,6 +195,9 @@ final class EditorView: NSView, NSTextViewDelegate {
     private let titlebarBackdrop = TitlebarBackdropView()
     private let filenameLabel = InlineFilenameField(labelWithString: "")
     private let filenameDivider = NSView()
+    private let fileStatus = NSStackView()
+    private let revealFileButton = NSButton()
+    private let unsavedLabel = NSTextField(labelWithString: "Unsaved")
     var onRenameFile: ((URL, String) -> Bool)?
     var sidebarVisible = false {
         didSet { needsLayout = true }
@@ -289,6 +292,32 @@ final class EditorView: NSView, NSTextViewDelegate {
         filenameDivider.layer?.backgroundColor = NSColor(white: 0.72, alpha: 1).cgColor
         filenameDivider.isHidden = true
         addSubview(filenameDivider)
+
+        revealFileButton.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Reveal in Finder")
+        revealFileButton.isBordered = false
+        revealFileButton.imagePosition = .imageOnly
+        revealFileButton.contentTintColor = .darkGray
+        revealFileButton.toolTip = "Reveal in Finder"
+        revealFileButton.target = self
+        revealFileButton.action = #selector(revealCurrentFile)
+        revealFileButton.setAccessibilityLabel("Reveal in Finder")
+        unsavedLabel.font = .systemFont(ofSize: 15)
+        unsavedLabel.textColor = .darkGray
+        fileStatus.orientation = .horizontal
+        fileStatus.alignment = .centerY
+        fileStatus.spacing = 8
+        fileStatus.edgeInsets = NSEdgeInsets(top: 3, left: 4, bottom: 3, right: 4)
+        fileStatus.wantsLayer = true
+        fileStatus.layer?.backgroundColor = NSColor.white.cgColor
+        fileStatus.addArrangedSubview(revealFileButton)
+        fileStatus.addArrangedSubview(unsavedLabel)
+        fileStatus.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(fileStatus)
+        NSLayoutConstraint.activate([
+            fileStatus.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            fileStatus.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
+        ])
+        updateFileStatus()
 
         scrollView.contentView.postsBoundsChangedNotifications = true
         boundsObserver = NotificationCenter.default.addObserver(
@@ -415,6 +444,24 @@ final class EditorView: NSView, NSTextViewDelegate {
         filenameLabel.toolTip = url?.lastPathComponent
         filenameLabel.isHidden = url == nil
         needsLayout = true
+        updateFileStatus()
+    }
+
+    func updateFileStatus() {
+        let note = textView.note
+        let exists = note?.fileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        revealFileButton.isHidden = !exists
+        unsavedLabel.isHidden = note == nil || (exists && note?.isDocumentEdited == false)
+        fileStatus.isHidden = revealFileButton.isHidden && unsavedLabel.isHidden
+        needsLayout = true
+    }
+
+    @objc private func revealCurrentFile() {
+        guard let url = textView.note?.fileURL, FileManager.default.fileExists(atPath: url.path) else {
+            updateFileStatus()
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     func filenameContains(_ point: NSPoint) -> Bool {
@@ -428,6 +475,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         textView.note = nil
         textView.string = note.text
         textView.note = note
+        updateFileStatus()
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         applyFontSize()
         if let container = textView.textContainer {

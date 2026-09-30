@@ -75,6 +75,34 @@ final class PlainTextTests: XCTestCase {
 
 @MainActor
 final class DocumentTests: XCTestCase {
+    func testFileStatusTracksExistenceAndEdits() throws {
+        let note = NoteDocument()
+        note.makeWindowControllers()
+        defer { note.close() }
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        let status = try XCTUnwrap(controller.editor.subviews.compactMap { $0 as? NSStackView }.first)
+        let button = try XCTUnwrap(status.arrangedSubviews.first as? NSButton)
+        let label = try XCTUnwrap(status.arrangedSubviews.last as? NSTextField)
+        XCTAssertTrue(button.isHidden)
+        XCTAssertFalse(label.isHidden)
+        XCTAssertEqual(label.stringValue, "Unsaved")
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("Saved".utf8).write(to: url)
+        note.fileURL = url
+        XCTAssertFalse(button.isHidden)
+        XCTAssertTrue(label.isHidden)
+        note.updateChangeCount(.changeDone)
+        XCTAssertFalse(label.isHidden)
+        note.updateChangeCount(.changeCleared)
+        XCTAssertTrue(label.isHidden)
+        try FileManager.default.removeItem(at: url)
+        controller.editor.updateFileStatus()
+        XCTAssertTrue(button.isHidden)
+        XCTAssertFalse(label.isHidden)
+    }
+
     func testBottomWhitespaceTracksWindowAndFontSize() throws {
         let note = NoteDocument()
         note.text = String(repeating: "A line of writing.\n", count: 60) + "Last line"

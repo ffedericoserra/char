@@ -427,6 +427,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
 
     func windowDidBecomeKey(_ notification: Notification) {
         sidebar.reload()
+        editor.updateFileStatus()
         (window as? NoteWindow)?.alignTitlebarControls()
     }
 

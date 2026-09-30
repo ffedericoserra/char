@@ -104,6 +104,17 @@ final class NoteDocument: NSDocument {
     override class var autosavesDrafts: Bool { false }
     override class var usesUbiquitousStorage: Bool { false }
 
+    override func updateChangeCount(_ change: NSDocument.ChangeType) {
+        super.updateChangeCount(change)
+        updateFileStatus()
+    }
+
+    private func updateFileStatus() {
+        for case let controller as EditorWindowController in windowControllers {
+            controller.editor.updateFileStatus()
+        }
+    }
+
     override func makeWindowControllers() {
         let controller = EditorWindowController()
         addWindowController(controller)
@@ -143,6 +154,7 @@ final class NoteDocument: NSDocument {
                        completionHandler: @escaping (Error?) -> Void) {
         let isFirstSave = fileURL == nil && (saveOperation == .saveOperation || saveOperation == .saveAsOperation)
         super.save(to: url, ofType: typeName, for: saveOperation) { error in
+            self.updateFileStatus()
             if error == nil, isFirstSave {
                 for case let controller as EditorWindowController in self.windowControllers {
                     controller.didSaveNewFile(at: url)
