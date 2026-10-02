@@ -729,9 +729,11 @@ final class DocumentTests: XCTestCase {
         let controller = EditorWindowController()
         let window = try XCTUnwrap(controller.window as? NoteWindow)
         defer { window.close() }
-        for size in [NSSize(width: 1280, height: 800), NSSize(width: 800, height: 500)] {
+        for size in [NSSize(width: 1280, height: 800), NSSize(width: 800, height: 500),
+                     NSSize(width: 1280, height: 800)] {
             window.setContentSize(size)
-            window.contentView?.layoutSubtreeIfNeeded()
+            window.contentView?.superview?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
             let nativeButtons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { window.standardWindowButton($0) }
             let controls = nativeButtons + window.noteButtons
             XCTAssertEqual(controls.count, 5)

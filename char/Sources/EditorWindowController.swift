@@ -132,8 +132,11 @@ final class NoteWindow: NSWindow {
         let nativeButtons = [ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { standardWindowButton($0) }
         for (index, (button, x)) in zip(nativeButtons + noteButtons, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
             guard let parent = button.superview else { continue }
-            let upwardOffset: CGFloat = index == 4 ? 2 : 0
-            let center = parent.convert(NSPoint(x: x, y: frame.height - 24 + upwardOffset), from: nil)
+            // Fixed window-space centers: preserve the traffic lights and sidebar,
+            // with the new-note symbol optically aligned one point higher.
+            // Reapply after AppKit layout; never derive these from native frames.
+            let distanceFromTop: CGFloat = index == 4 ? 23 : 24
+            let center = parent.convert(NSPoint(x: x, y: frame.height - distanceFromTop), from: nil)
             let origin = NSPoint(x: center.x - button.frame.width / 2, y: center.y - button.frame.height / 2)
             if button.frame.origin != origin { button.setFrameOrigin(origin) }
         }
@@ -367,7 +370,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
             splitView.adjustSubviews()
         }
         sidebarButton.state = sidebarVisible ? .on : .off
-        sidebarButton.toolTip = sidebarVisible ? "Hide Sidebar (⌘B)" : "Show Sidebar (⌘B)"
+        sidebarButton.toolTip = sidebarVisible ? "Hide Sidebar (⌘⇧E)" : "Show Sidebar (⌘⇧E)"
         window?.makeFirstResponder(editor.textView)
     }
 
@@ -539,7 +542,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
 
         sidebarButton = titlebarButton("sidebar.left", label: "Toggle Sidebar", action: #selector(toggleSidebar(_:)))
         sidebarButton.frame = NSRect(x: 8, y: 11, width: 26, height: 26)
-        sidebarButton.toolTip = "Show Sidebar (⌘B)"
+        sidebarButton.toolTip = "Show Sidebar (⌘⇧E)"
         let newButton = titlebarButton("square.and.pencil", label: "New Note", action: #selector(newNote(_:)))
         newButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
         newButton.frame = NSRect(x: 42, y: 11, width: 26, height: 26)
