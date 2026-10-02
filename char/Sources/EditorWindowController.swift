@@ -3,16 +3,15 @@ import UniformTypeIdentifiers
 
 private final class SidebarSplitView: NSSplitView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // NSTextView can consume Command-B as a formatting shortcut before
-        // the main menu sees it, even though this editor is plain text.
+        // Handle these shortcuts before the text view consumes them.
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if event.type == .keyDown, modifiers == [.command, .shift],
-           event.charactersIgnoringModifiers?.lowercased() == "d" {
+           event.charactersIgnoringModifiers?.lowercased() == "m" {
             AppTheme.toggle()
             return true
         }
-        if event.type == .keyDown, modifiers == .command,
-           event.charactersIgnoringModifiers?.lowercased() == "b",
+        if event.type == .keyDown, modifiers == [.command, .shift],
+           event.charactersIgnoringModifiers?.lowercased() == "e",
            let window, window.attachedSheet == nil,
            let controller = window.windowController as? EditorWindowController {
             controller.toggleSidebar(self)

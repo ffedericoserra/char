@@ -47,10 +47,10 @@ enum AppMenu {
         find.tag = NSTextFinder.Action.showFindInterface.rawValue
 
         let view = submenu("View", in: main)
-        item("Toggle Sidebar", #selector(EditorWindowController.toggleSidebar(_:)), key: "b", in: view)
-        let theme = item("Dark Theme", #selector(AppDelegate.toggleDarkTheme(_:)), key: "d", modifiers: [.command, .shift], in: view)
+        item("Toggle Sidebar", #selector(EditorWindowController.toggleSidebar(_:)), key: "e", modifiers: [.command, .shift], in: view)
+        let theme = item("Dark Theme", #selector(AppDelegate.toggleDarkTheme(_:)), key: "m", modifiers: [.command, .shift], in: view)
         theme.target = NSApp.delegate
-        let mono = item("System Monospace", #selector(AppDelegate.toggleSystemMonospace(_:)), key: "m", modifiers: [.command, .shift], in: view)
+        let mono = item("System Monospace", #selector(AppDelegate.toggleSystemMonospace(_:)), key: "d", modifiers: [.command, .shift], in: view)
         mono.target = NSApp.delegate
         item("Increase Font Size", #selector(EditorWindowController.increaseFontSize(_:)), key: "+", in: view)
         item("Decrease Font Size", #selector(EditorWindowController.decreaseFontSize(_:)), key: "-", in: view)

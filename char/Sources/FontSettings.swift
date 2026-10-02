@@ -8,7 +8,7 @@ private final class SettingsWindow: NSWindow {
 final class FontSettingsController: NSWindowController {
     private let family = NSPopUpButton()
     private let size = NSPopUpButton()
-    private let mono = NSButton(checkboxWithTitle: "Use system monospace (⌘⇧M)", target: nil, action: nil)
+    private let mono = NSButton(checkboxWithTitle: "Use system monospace (⌘⇧D)", target: nil, action: nil)
 
     init() {
         let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),

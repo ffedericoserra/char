@@ -96,7 +96,7 @@ final class DocumentTests: XCTestCase {
         let sidebarScroll = try XCTUnwrap(sidebar.subviews.first { $0 is NSScrollView } as? NSScrollView)
         let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
             modifierFlags: [.command, .shift], timestamp: 0, windowNumber: window.windowNumber,
-            context: nil, characters: "D", charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2))
+            context: nil, characters: "M", charactersIgnoringModifiers: "m", isARepeat: false, keyCode: 46))
         for dark in [true, false] {
             XCTAssertTrue(split.performKeyEquivalent(with: event))
             XCTAssertEqual(AppTheme.isDark, dark)
@@ -923,7 +923,7 @@ final class DocumentTests: XCTestCase {
         XCTAssertTrue(backdrop.isHidden)
     }
 
-    func testCommandBTogglesSidebarWhileEditing() throws {
+    func testCommandShiftETogglesSidebarWhileEditing() throws {
         let controller = EditorWindowController()
         let window = try XCTUnwrap(controller.window)
         defer { window.close() }
@@ -934,9 +934,9 @@ final class DocumentTests: XCTestCase {
         textView.string = "Keep this text"
         textView.setSelectedRange(NSRange(location: 0, length: 4))
         let event = try XCTUnwrap(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: .command,
+            with: .keyDown, location: .zero, modifierFlags: [.command, .shift],
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-            context: nil, characters: "b", charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11
+            context: nil, characters: "E", charactersIgnoringModifiers: "e", isARepeat: false, keyCode: 14
         ))
 
         XCTAssertTrue(window.firstResponder === textView)
