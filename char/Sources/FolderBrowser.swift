@@ -49,6 +49,21 @@ private final class FolderNode {
     init(_ entry: FolderEntry) { self.entry = entry }
 }
 
+private final class FolderCellView: NSTableCellView {
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { applyTheme() }
+    }
+
+    func applyTheme() {
+        // AppKit uses .dark for the emphasized selection, and .light when
+        // the outline loses focus and displays a pale selection instead.
+        textField?.textColor = !AppTheme.isDark && backgroundStyle == .dark
+            ? .white : AppTheme.palette.sidebarText
+        textField?.font = AppTheme.palette.sidebarFont
+        imageView?.contentTintColor = AppTheme.palette.icons
+    }
+}
+
 private final class FolderOutlineView: NSOutlineView, NSMenuItemValidation {
     var contextMenu: ((NSEvent) -> NSMenu?)?
     var copySelection: (() -> Void)?
@@ -187,10 +202,8 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         message.textColor = AppTheme.palette.secondaryText
         // Restyle existing rows without reloading selection or ending a rename.
         for row in 0..<outline.numberOfRows {
-            guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? NSTableCellView else { continue }
-            cell.imageView?.contentTintColor = AppTheme.palette.icons
-            cell.textField?.textColor = AppTheme.palette.sidebarText
-            cell.textField?.font = AppTheme.palette.sidebarFont
+            guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FolderCellView else { continue }
+            cell.applyTheme()
         }
     }
 
@@ -561,7 +574,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let node = item as? FolderNode else { return nil }
-        let cell = NSTableCellView()
+        let cell = FolderCellView()
         let icon = NSImageView()
         icon.image = NSImage(systemSymbolName: node.entry.isDirectory ? "folder" : "doc.text", accessibilityDescription: nil)
         icon.contentTintColor = AppTheme.palette.icons
@@ -577,6 +590,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         cell.textField = label
         cell.addSubview(icon)
         cell.addSubview(label)
+        cell.applyTheme()
         icon.translatesAutoresizingMaskIntoConstraints = false
         label.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([

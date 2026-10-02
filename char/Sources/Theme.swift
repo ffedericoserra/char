@@ -17,8 +17,8 @@ struct ThemePalette {
     var statusFont: NSFont = .systemFont(ofSize: 15)
 
     static let light = ThemePalette(
-        editorBackground: NSColor(white: 1, alpha: 1),
-        sidebarBackground: NSColor(white: 0.965, alpha: 1),
+        editorBackground: NSColor(white: 0.965, alpha: 1),
+        sidebarBackground: NSColor(white: 0.930, alpha: 1),
         text: NSColor(white: 0.22, alpha: 1),
         sidebarText: NSColor(white: 0.15, alpha: 1),
         secondaryText: NSColor(white: 0.4, alpha: 1),
