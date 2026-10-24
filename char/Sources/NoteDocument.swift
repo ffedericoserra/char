@@ -23,6 +23,17 @@ enum NoteFileOperations {
         return destination
     }
 
+    /// Decided from the path alone, so the protected Trash is never read.
+    static func isInTrash(_ url: URL) -> Bool {
+        url.standardizedFileURL.pathComponents.contains { $0 == ".Trash" || $0 == ".Trashes" }
+    }
+
+    /// Only a definite "no such file" counts; a permission error does not.
+    static func isDeleted(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) != 0 && errno == ENOENT
+    }
+
     static func relocatedURL(_ url: URL, from source: URL, to destination: URL) -> URL {
         let prefix = source.standardizedFileURL.pathComponents
         let components = url.standardizedFileURL.pathComponents
@@ -102,6 +113,7 @@ final class NoteDocument: NSDocument {
     var text = ""
     /// The window showing this note as a tab, whether or not it is the selected one.
     weak var tabHost: EditorWindowController?
+    private var fileWatcher: DispatchSourceFileSystemObject?
 
     var isBlank: Bool { fileURL == nil && !isDocumentEdited && text.isEmpty }
 
@@ -183,6 +195,8 @@ final class NoteDocument: NSDocument {
         }
         super.save(to: url, ofType: typeName, for: saveOperation) { error in
             self.updateFileStatus()
+            // A safe save replaces the file; follow the new one right away.
+            if error == nil { self.watchFile() }
             if error == nil, saveOperation == .saveOperation || saveOperation == .saveAsOperation {
                 self.tabHost?.documentDidSave(self)
             }
@@ -195,8 +209,54 @@ final class NoteDocument: NSDocument {
         }
     }
 
+    override func close() {
+        fileWatcher?.cancel()
+        fileWatcher = nil
+        super.close()
+    }
+
+    /// Follow the file itself rather than its path: moves into and out of the
+    /// Trash keep the same file, while a deletion leaves it with no links.
+    private func watchFile() {
+        fileWatcher?.cancel()
+        fileWatcher = nil
+        guard let url = fileURL else { return }
+        let descriptor = open(url.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor,
+                                                               eventMask: [.delete, .rename], queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.fileDidChangeOnDisk() }
+        }
+        source.setCancelHandler { Darwin.close(descriptor) }
+        source.resume()
+        fileWatcher = source
+    }
+
+    private func fileDidChangeOnDisk() {
+        guard let source = fileWatcher, let url = fileURL else { return }
+        let descriptor = Int32(source.handle)
+        var watched = stat()
+        var current = stat()
+        let isLinked = fstat(descriptor, &watched) == 0 && watched.st_nlink > 0
+        if stat(url.path, &current) == 0 {
+            // Saving replaces the file at the same path; watch the new one.
+            if current.st_ino != watched.st_ino || current.st_dev != watched.st_dev { watchFile() }
+            tabHost?.documentStateDidChange(self)
+        } else if isLinked {
+            var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            guard fcntl(descriptor, F_GETPATH, &path) != -1 else { return }
+            fileURL = URL(fileURLWithPath: String(cString: path))
+        } else if NoteFileOperations.isDeleted(url) {
+            fileWatcher?.cancel()
+            fileWatcher = nil
+            tabHost?.fileWasDeleted(self)
+        }
+    }
+
     override var fileURL: URL? {
         didSet {
+            if fileURL?.standardizedFileURL != oldValue?.standardizedFileURL || fileWatcher == nil { watchFile() }
             for case let controller as EditorWindowController in windowControllers {
                 controller.documentLocationDidChange()
             }

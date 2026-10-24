@@ -729,11 +729,14 @@ final class DocumentTests: XCTestCase {
         wait(for: [loaded], timeout: 5)
     }
 
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) {
+    private func waitUntil(file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: @escaping @MainActor () -> Bool) {
         let met = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             MainActor.assumeIsolated { condition() }
         }, object: nil)
-        wait(for: [met], timeout: 5)
+        if XCTWaiter().wait(for: [met], timeout: 5) != .completed {
+            XCTFail("Condition not met in time", file: file, line: line)
+        }
     }
 
     func testSidebarOpensPreviewTabsThatBecomePermanentWhenEdited() throws {
@@ -866,6 +869,138 @@ final class DocumentTests: XCTestCase {
         XCTAssertTrue(controller.document === notes[0])
         XCTAssertFalse(controller.editor.showsTabs)
         XCTAssertTrue(window.isVisible)
+    }
+
+    func testDraggingWideTabToFrontAndSeparatorsSkipHighlightedTabs() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let names = ["1", "2", "a-much-wider-name.txt"]
+        let first = NoteDocument()
+        NSDocumentController.shared.addDocument(first)
+        first.makeWindowControllers()
+        let controller = try XCTUnwrap(first.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close(); (controller.document as? NSDocument)?.close() }
+        controller.showWindow(nil)
+        for name in names {
+            let url = directory.appendingPathComponent(name)
+            try Data().write(to: url)
+            let note = try NoteDocument(contentsOf: url, ofType: "public.plain-text")
+            NSDocumentController.shared.addDocument(note)
+            XCTAssertTrue(controller.openTab(note))
+        }
+        let bar = controller.editor.tabBar
+        bar.layoutSubtreeIfNeeded()
+        let tabViews = bar.subviews.filter { $0.accessibilityRole() == .radioButton }.sorted { $0.frame.minX < $1.frame.minX }
+        let separators = bar.subviews.filter { $0.accessibilityRole() != .radioButton }.sorted { $0.frame.minX < $1.frame.minX }
+        // The blank untitled note was reused by the first file.
+        XCTAssertEqual(tabViews.count, 3)
+        XCTAssertEqual(separators.count, 3)
+        // The last tab is selected: only separators away from it remain.
+        XCTAssertEqual(separators.map(\.isHidden), [false, true, true])
+
+        let wide = try XCTUnwrap(tabViews.last)
+        XCTAssertGreaterThan(wide.frame.width, tabViews[0].frame.width)
+        let start = wide.convert(NSPoint(x: wide.bounds.midX, y: wide.bounds.midY), to: nil)
+        func mouse(_ type: NSEvent.EventType, _ x: CGFloat) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: start.y), modifierFlags: [], timestamp: 0,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                               pressure: 1)!
+        }
+        for step in stride(from: start.x - 20, through: 0, by: -20) {
+            window.postEvent(mouse(.leftMouseDragged, step), atStart: false)
+        }
+        window.postEvent(mouse(.leftMouseUp, 0), atStart: false)
+        wide.mouseDown(with: mouse(.leftMouseDown, start.x))
+        XCTAssertEqual(controller.tabs.first?.document.fileURL?.lastPathComponent, "a-much-wider-name.txt")
+        XCTAssertEqual(controller.editor.tabBar.items.first?.isActive, true)
+    }
+
+    func testTrashingSelectedTabFromSidebarSelectsNeighbor() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let urls = ["keep.txt", "trash-me.txt"].map { directory.appendingPathComponent($0) }
+        for url in urls { try Data("Text".utf8).write(to: url) }
+        let blank = NoteDocument()
+        NSDocumentController.shared.addDocument(blank)
+        blank.makeWindowControllers()
+        let controller = try XCTUnwrap(blank.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close(); (controller.document as? NSDocument)?.close() }
+        controller.showWindow(nil)
+        for url in urls {
+            let note = try NoteDocument(contentsOf: url, ofType: "public.plain-text")
+            NSDocumentController.shared.addDocument(note)
+            XCTAssertTrue(controller.openTab(note))
+        }
+        let trashed = try XCTUnwrap(controller.document as? NoteDocument)
+        XCTAssertEqual(trashed.fileURL, urls[1])
+        let sidebar = try XCTUnwrap((window.contentView as? NSSplitView)?.arrangedSubviews.first as? FolderBrowser)
+        sidebar.onTrashFile?(urls[1])
+        let sheet = try XCTUnwrap(window.attachedSheet)
+        window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        waitUntil { (controller.document as? NoteDocument)?.fileURL == urls[0] }
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(controller.tabs.count, 1)
+        XCTAssertFalse(NSDocumentController.shared.documents.contains { $0 === trashed })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: urls[1].path))
+    }
+
+    func testExternalTrashStrikesTabAndDeletionClosesIt() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let trash = directory.appendingPathComponent(".Trash")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let urls = ["keep.txt", "external.txt", "edited.txt"].map { directory.appendingPathComponent($0) }
+        for url in urls { try Data("Text".utf8).write(to: url) }
+        let blank = NoteDocument()
+        NSDocumentController.shared.addDocument(blank)
+        blank.makeWindowControllers()
+        let controller = try XCTUnwrap(blank.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close(); (controller.document as? NSDocument)?.close() }
+        controller.showWindow(nil)
+        var notes: [NoteDocument] = []
+        for url in urls {
+            let note = try NoteDocument(contentsOf: url, ofType: "public.plain-text")
+            NSDocumentController.shared.addDocument(note)
+            XCTAssertTrue(controller.openTab(note))
+            notes.append(note)
+        }
+        func item(_ note: NoteDocument) -> TabBarView.Item? {
+            guard let index = controller.tabs.firstIndex(where: { $0.document === note }) else { return nil }
+            return controller.editor.tabBar.items[index]
+        }
+
+        // Moved outside the app (no file coordination): the tab follows it.
+        let trashed = trash.appendingPathComponent("external.txt")
+        XCTAssertEqual(rename(urls[1].path, trashed.path), 0)
+        waitUntil { item(notes[1])?.isStruckThrough == true }
+        XCTAssertEqual(notes[1].fileURL?.standardizedFileURL.path, trashed.standardizedFileURL.path)
+        XCTAssertEqual(rename(trashed.path, urls[1].path), 0)
+        waitUntil { item(notes[1])?.isStruckThrough == false }
+
+        // Saving replaces the file; the watcher must keep following the path.
+        let saved = expectation(description: "Saved")
+        notes[1].save(to: urls[1], ofType: "public.plain-text", for: .saveOperation) { _ in saved.fulfill() }
+        wait(for: [saved], timeout: 5)
+        XCTAssertEqual(rename(urls[1].path, trashed.path), 0)
+        waitUntil { item(notes[1])?.isStruckThrough == true }
+
+        // Emptying the Trash closes a clean tab.
+        XCTAssertEqual(unlink(trashed.path), 0)
+        waitUntil { controller.tabs.count == 2 }
+        XCTAssertFalse(NSDocumentController.shared.documents.contains { $0 === notes[1] })
+
+        // Unsaved edits keep their tab, struck through.
+        controller.selectTab(try XCTUnwrap(controller.tabs.first { $0.document === notes[2] }))
+        notes[2].updateChangeCount(.changeDone)
+        XCTAssertEqual(unlink(urls[2].path), 0)
+        waitUntil { item(notes[2])?.isStruckThrough == true }
+        XCTAssertEqual(controller.tabs.count, 2)
+        notes[2].updateChangeCount(.changeCleared)
     }
 
     func testOnlyTabsKeepTitlebarOpaqueInWideWindows() throws {

@@ -14,6 +14,7 @@ enum EditorMetrics {
     static let filenameLeadingInset: CGFloat = 180
     static let filenameButtonSpacing: CGFloat = 31
     static let filenameSidebarInset: CGFloat = 12
+    static let filenameLabelOffset: CGFloat = 2
     static let tabBarHeight: CGFloat = 30
     static let tabHeight: CGFloat = 26
     static let tabSpacing: CGFloat = 4
@@ -24,6 +25,7 @@ enum EditorMetrics {
     static let tabCloseSize: CGFloat = 16
     static let tabCloseSpacing: CGFloat = 4
     static let tabCornerRadius: CGFloat = 6
+    static let tabSeparatorHeight: CGFloat = 16
     static let tabBarTrailingInset: CGFloat = 12
 }
 
@@ -511,7 +513,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         guard let parent = filenameLabel.superview else { return }
         let filenameX = filenameLeadingInset
         let labelHeight = ceil(filenameLabel.intrinsicContentSize.height)
-        let frame = convert(NSRect(x: filenameX,
+        let frame = convert(NSRect(x: filenameX - EditorMetrics.filenameLabelOffset,
                                    y: bounds.maxY - EditorMetrics.titlebarHeight / 2 - labelHeight / 2,
                                    width: EditorMetrics.filenameMaxWidth, height: labelHeight), to: parent)
         filenameLabel.frame = parent.backingAlignedRect(frame, options: .alignAllEdgesNearest)

@@ -300,9 +300,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     private func updateTabBar() {
         editor.setTabs(tabs.map { tab in
             let url = tab.document.fileURL
+            let isGone = url.map { NoteFileOperations.isInTrash($0) || NoteFileOperations.isDeleted($0) } ?? false
             return TabBarView.Item(id: ObjectIdentifier(tab), title: url?.lastPathComponent ?? tab.document.displayName,
                                    toolTip: url?.path, isEdited: tab.document.isDocumentEdited,
-                                   isActive: tab === activeTab)
+                                   isActive: tab === activeTab, isStruckThrough: isGone)
         })
     }
 
@@ -316,12 +317,51 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         updateTabBar()
     }
 
+    /// Catch deletions the file watcher missed while the app was inactive.
+    func checkFilesOnDisk() {
+        for tab in tabs where tab.document.fileURL.map(NoteFileOperations.isDeleted) == true {
+            fileWasDeleted(tab.document)
+        }
+        updateTabBar()
+    }
+
+    /// A file deleted from disk closes its tab. Unsaved edits keep it open,
+    /// struck through, so they can still be saved somewhere else.
+    func fileWasDeleted(_ note: NoteDocument) {
+        guard !note.isDocumentEdited, window?.attachedSheet == nil, pendingURL == nil, !creatingNewNote,
+              closingTab == nil, let index = tabs.firstIndex(where: { $0.document === note }) else {
+            updateTabBar()
+            return
+        }
+        if tabs.count > 1 {
+            removeTab(at: index)
+        } else {
+            // Keep the window, as deleting the open note from the sidebar does.
+            guard let replacement = try? NSDocumentController.shared.makeUntitledDocument(
+                ofType: "public.plain-text") as? NoteDocument else { return }
+            NSDocumentController.shared.addDocument(replacement)
+            note.removeWindowController(self)
+            replacement.addWindowController(self)
+            display(replacement)
+        }
+        note.tabHost = nil
+        note.close()
+    }
+
     func showTab(for note: NoteDocument) {
         if let tab = tab(for: note) { selectTab(tab) }
     }
 
     func selectTab(_ tab: EditorTab, focusEditor: Bool = true) {
-        guard tabs.contains(where: { $0 === tab }), window?.attachedSheet == nil else { return }
+        guard window?.attachedSheet == nil else { return }
+        activate(tab, focusEditor: focusEditor)
+    }
+
+    /// Switch without the sheet check. A sheet's completion handler (Trash,
+    /// Save) can run before AppKit detaches it, and removing the selected tab
+    /// must still move its window to another note.
+    private func activate(_ tab: EditorTab, focusEditor: Bool = true) {
+        guard tabs.contains(where: { $0 === tab }) else { return }
         guard tab !== activeTab || document !== tab.document else {
             if focusEditor { window?.makeFirstResponder(editor.textView) }
             return
@@ -357,7 +397,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         let index = activeTab.flatMap { active in tabs.firstIndex { $0 === active } }.map { $0 + 1 } ?? tabs.count
         tabs.insert(tab, at: index)
         tab.document.tabHost = self
-        selectTab(tab, focusEditor: focusEditor)
+        activate(tab, focusEditor: focusEditor)
     }
 
     @objc func newTab(_ sender: Any?) {
@@ -412,7 +452,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     private func removeTab(at index: Int) {
         let tab = tabs.remove(at: index)
         if tab === activeTab, !tabs.isEmpty {
-            selectTab(tabs[min(index, tabs.count - 1)])
+            activate(tabs[min(index, tabs.count - 1)])
         } else {
             updateTabBar()
         }
@@ -478,7 +518,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         reusable.scrollPosition = nil
         old.tabHost = nil
         note.tabHost = self
-        selectTab(reusable, focusEditor: !preview)
+        activate(reusable, focusEditor: !preview)
         old.close()
     }
 
@@ -686,6 +726,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        checkFilesOnDisk()
         sidebar.reload()
         editor.updateFileStatus()
         (window as? NoteWindow)?.alignTitlebarControls()

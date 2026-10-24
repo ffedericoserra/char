@@ -15,7 +15,7 @@ struct ThemePalette {
     // Empty family uses the system font. Settings overrides the editor family.
     var editorFontFamily = ""
     var sidebarFont: NSFont = .systemFont(ofSize: 13)
-    var titleFont: NSFont = .systemFont(ofSize: 14, weight: .bold)
+    var titleFont: NSFont = .systemFont(ofSize: 13)
     var statusFont: NSFont = .systemFont(ofSize: 15)
     var tabFont: NSFont = .systemFont(ofSize: 13)
 
@@ -31,7 +31,7 @@ struct ThemePalette {
         hoveredTab: NSColor(srgbRed: 0.895, green: 0.905, blue: 0.92, alpha: 1),
         editorFontFamily: "",
         sidebarFont: .systemFont(ofSize: 13),
-        titleFont: .systemFont(ofSize: 14, weight: .bold),
+        titleFont: .systemFont(ofSize: 13),
         statusFont: .systemFont(ofSize: 15),
         tabFont: .systemFont(ofSize: 13)
     )
@@ -48,7 +48,7 @@ struct ThemePalette {
         hoveredTab: NSColor(white: 0.19, alpha: 1),
         editorFontFamily: "",
         sidebarFont: .systemFont(ofSize: 13),
-        titleFont: .systemFont(ofSize: 14, weight: .bold),
+        titleFont: .systemFont(ofSize: 13),
         statusFont: .systemFont(ofSize: 15),
         tabFont: .systemFont(ofSize: 13)
     )

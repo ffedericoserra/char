@@ -8,6 +8,7 @@ final class TabBarView: NSView {
         let toolTip: String?
         let isEdited: Bool
         let isActive: Bool
+        var isStruckThrough = false
     }
 
     var items: [Item] = [] {
@@ -17,6 +18,8 @@ final class TabBarView: NSView {
     var onClose: ((Int) -> Void)?
     var onMove: ((Int, Int) -> Void)?
     private var itemViews: [TabItemView] = []
+    // separators[i] trails itemViews[i], including one after the last tab.
+    private var separators: [NSView] = []
     private var draggedView: TabItemView?
 
     override init(frame frameRect: NSRect) {
@@ -28,7 +31,10 @@ final class TabBarView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func applyTheme() { itemViews.forEach { $0.applyTheme() } }
+    func applyTheme() {
+        itemViews.forEach { $0.applyTheme() }
+        separators.forEach { $0.layer?.backgroundColor = AppTheme.palette.divider.cgColor }
+    }
 
     func tabContains(_ windowPoint: NSPoint) -> Bool {
         !isHidden && itemViews.contains { $0.convert($0.bounds, to: nil).contains(windowPoint) }
@@ -45,13 +51,41 @@ final class TabBarView: NSView {
         existing.values.forEach { $0.removeFromSuperview() }
         for view in views where view.superview !== self { addSubview(view) }
         itemViews = views
+        while separators.count > views.count { separators.removeLast().removeFromSuperview() }
+        while separators.count < views.count {
+            let separator = NSView()
+            separator.wantsLayer = true
+            separator.layer?.backgroundColor = AppTheme.palette.divider.cgColor
+            addSubview(separator, positioned: .below, relativeTo: nil)
+            separators.append(separator)
+        }
         needsLayout = true
     }
 
     override func layout() {
         super.layout()
         guard draggedView == nil else { return }
-        for (view, frame) in zip(itemViews, slotFrames()) where view.frame != frame { view.frame = frame }
+        let frames = slotFrames()
+        for (view, frame) in zip(itemViews, frames) where view.frame != frame { view.frame = frame }
+        placeSeparators(along: frames, animated: false)
+    }
+
+    private func placeSeparators(along frames: [NSRect], animated: Bool) {
+        let height = EditorMetrics.tabSeparatorHeight
+        for (separator, frame) in zip(separators, frames) {
+            let rect = NSRect(x: round(frame.maxX + EditorMetrics.tabSpacing / 2 - 0.5),
+                              y: round(frame.midY - height / 2), width: 1, height: height)
+            if animated { separator.animator().frame = rect } else { separator.frame = rect }
+        }
+        updateSeparators()
+    }
+
+    /// Separators disappear beside the selected and the hovered tab.
+    fileprivate func updateSeparators() {
+        let highlighted = itemViews.map(\.isHighlighted)
+        for (index, separator) in separators.enumerated() where index < highlighted.count {
+            separator.isHidden = highlighted[index] || (index + 1 < highlighted.count && highlighted[index + 1])
+        }
     }
 
     private func slotFrames() -> [NSRect] {
@@ -84,9 +118,11 @@ final class TabBarView: NSView {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.15
             context.allowsImplicitAnimation = true
-            for (view, frame) in zip(itemViews, slotFrames()) where view !== excluded {
+            let frames = slotFrames()
+            for (view, frame) in zip(itemViews, frames) where view !== excluded {
                 view.animator().frame = frame
             }
+            placeSeparators(along: frames, animated: true)
         }
     }
 
@@ -116,7 +152,8 @@ final class TabBarView: NSView {
                 draggedView = view
                 addSubview(view, positioned: .above, relativeTo: nil)
             }
-            view.frame.origin.x = min(max(0, originX + x - startX), max(0, bounds.width - view.frame.width))
+            let rowWidth = slotFrames().last?.maxX ?? bounds.width
+            view.frame.origin.x = min(max(0, originX + x - startX), max(0, rowWidth - view.frame.width))
             reorder(view)
         }
         guard dragging else { return }
@@ -127,9 +164,14 @@ final class TabBarView: NSView {
 
     private func reorder(_ view: TabItemView) {
         guard let index = itemViews.firstIndex(of: view) else { return }
-        // A neighbor swaps once the dragged tab's center crosses its center.
+        // A neighbor swaps once the dragged tab's leading edge (moving left)
+        // or trailing edge (moving right) crosses its center, whatever the widths.
         let frames = slotFrames()
-        let target = itemViews.indices.filter { $0 != index && frames[$0].midX < view.frame.midX }.count
+        var target = index
+        while target > 0, view.frame.minX < frames[target - 1].midX { target -= 1 }
+        if target == index {
+            while target < frames.count - 1, view.frame.maxX > frames[target + 1].midX { target += 1 }
+        }
         guard target != index else { return }
         itemViews.remove(at: index)
         itemViews.insert(view, at: target)
@@ -146,8 +188,13 @@ private final class TabItemView: NSView {
     private let closeButton = NSButton()
     private var hoverArea: NSTrackingArea?
     private var isHovered = false {
-        didSet { if isHovered != oldValue { update() } }
+        didSet {
+            guard isHovered != oldValue else { return }
+            update()
+            bar?.updateSeparators()
+        }
     }
+    var isHighlighted: Bool { item.isActive || isHovered }
 
     init(item: TabBarView.Item, bar: TabBarView) {
         self.item = item
@@ -191,11 +238,20 @@ private final class TabItemView: NSView {
             ? NSFont(descriptor: font.fontDescriptor.withSymbolicTraits(.italic), size: font.pointSize) ?? font
             : font
         label.textColor = palette.text
-        label.stringValue = item.title
+        if item.isStruckThrough {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingMiddle
+            label.attributedStringValue = NSAttributedString(string: item.title, attributes: [
+                .font: label.font ?? font, .foregroundColor: palette.text, .paragraphStyle: paragraph,
+                .strikethroughStyle: NSUnderlineStyle.single.rawValue
+            ])
+        } else {
+            label.stringValue = item.title
+        }
         toolTip = item.toolTip ?? item.title
         closeButton.contentTintColor = palette.secondaryText
         closeButton.isHidden = !(item.isActive || isHovered)
-        setAccessibilityLabel(item.isEdited ? "\(item.title), edited" : item.title)
+        setAccessibilityLabel(item.title + (item.isEdited ? ", edited" : "") + (item.isStruckThrough ? ", deleted" : ""))
         setAccessibilityValue(item.isActive)
         needsLayout = true
         needsDisplay = true
