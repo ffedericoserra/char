@@ -2,12 +2,6 @@ import XCTest
 import AppKit
 @testable import char
 
-private final class DiscreteWheelEvent: NSEvent {
-    var step: CGFloat = -6
-    override var hasPreciseScrollingDeltas: Bool { false }
-    override var scrollingDeltaY: CGFloat { step }
-}
-
 final class PlainTextTests: XCTestCase {
     func testUnicodeRoundTrip() throws {
         let text = "Pensieri — caffè ☕️\n日本語\nمرحبا\n👨‍👩‍👧‍👦"
@@ -478,7 +472,7 @@ final class DocumentTests: XCTestCase {
             }
             wait(for: [saved], timeout: 10)
             XCTAssertEqual(controller.folderURL?.standardizedFileURL, expectedRoot.standardizedFileURL)
-            XCTAssertFalse(sidebar.isHidden)
+            XCTAssertTrue(sidebar.isHidden)
         }
     }
 
@@ -1161,7 +1155,7 @@ final class DocumentTests: XCTestCase {
         XCTAssertFalse(sidebar.isHidden)
         XCTAssertEqual(sidebar.frame.width, 240, accuracy: 2)
         let scroll = try XCTUnwrap(sidebar.subviews.first { $0 is NSScrollView } as? NSScrollView)
-        XCTAssertTrue(scroll is SmoothScrollView)
+        XCTAssertTrue(scroll is EditorScrollView)
         XCTAssertEqual(scroll.scrollerStyle, .overlay)
 
         controller.toggleSidebar(nil)
@@ -1367,49 +1361,21 @@ final class DocumentTests: XCTestCase {
         }
     }
 
-    func testMouseWheelBurstAccumulatesFullDistance() throws {
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { throw XCTSkip("Reduce Motion disables wheel animation.") }
-        let note = NoteDocument()
-        note.text = String(repeating: "A line of text.\n", count: 300)
-        note.makeWindowControllers()
-        defer { note.close() }
-        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
-        controller.showWindow(nil)
-        controller.window?.contentView?.layoutSubtreeIfNeeded()
-        let scroll = controller.editor.scrollView
-        let initialY = scroll.contentView.bounds.minY
-        for _ in 0..<3 { scroll.scrollWheel(with: DiscreteWheelEvent()) }
-        let settled = expectation(description: "Burst settles at its full distance")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
-            XCTAssertEqual(scroll.contentView.bounds.minY, initialY + 72 * scroll.verticalLineScroll, accuracy: 0.5)
-            settled.fulfill()
-        }
-        wait(for: [settled], timeout: 2)
+    func testScrollSpeedScalesWheelDeltas() throws {
+        let cgEvent = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                            wheelCount: 1, wheel1: -10, wheel2: 0, wheel3: 0))
+        let event = try XCTUnwrap(NSEvent(cgEvent: cgEvent))
+        let scaled = EditorScrollView.scaled(event, by: 2)
+        XCTAssertEqual(scaled.scrollingDeltaY, event.scrollingDeltaY * 2, accuracy: 0.5)
     }
 
-    func testMouseWheelEasesAndSettles() throws {
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            throw XCTSkip("Reduce Motion intentionally disables wheel animation.")
-        }
+    func testScrollerStartsBelowTitlebar() throws {
         let note = NoteDocument()
-        note.text = String(repeating: "A line of text for scrolling.\n", count: 200)
         note.makeWindowControllers()
         defer { note.close() }
         let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
-        controller.showWindow(nil)
         controller.window?.contentView?.layoutSubtreeIfNeeded()
-        let scroll = controller.editor.scrollView
-        let initialY = scroll.contentView.bounds.minY
-        let event = DiscreteWheelEvent()
-        scroll.scrollWheel(with: event)
-        // A coarse wheel step must no longer jump to its destination immediately.
-        XCTAssertEqual(scroll.contentView.bounds.minY, initialY, accuracy: 0.01)
-        let settled = expectation(description: "Wheel animation reaches its destination")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            XCTAssertEqual(scroll.contentView.bounds.minY, initialY + 24 * scroll.verticalLineScroll, accuracy: 0.5)
-            settled.fulfill()
-        }
-        wait(for: [settled], timeout: 2)
+        XCTAssertEqual(controller.editor.scrollView.scrollerInsets.top, EditorMetrics.titlebarHeight)
     }
 
     func testNewDocumentAndEditorDefaults() throws {

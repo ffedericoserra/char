@@ -119,7 +119,7 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     var onNewFile: (() -> Void)?
     private(set) var folderURL: URL?
     private let outline = FolderOutlineView()
-    private let scroll = SmoothScrollView()
+    private let scroll = EditorScrollView()
     private let title = NSTextField(labelWithString: "Folder")
     private let message = NSTextField(wrappingLabelWithString: "Open a folder to browse your notes.")
     private let openButton = NSButton(title: "Open Folder…", target: nil, action: nil)

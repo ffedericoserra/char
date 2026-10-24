@@ -242,7 +242,7 @@ final class NoteTextView: NSTextView {
 
 final class EditorView: NSView, NSTextViewDelegate {
     private(set) var fontSize = EditorSession.fontSize
-    let scrollView = SmoothScrollView()
+    let scrollView = EditorScrollView()
     // TextKit 1 exposes AppKit's custom caret drawing while retaining native
     // selection, input methods, undo, and plain-text layout.
     let textView = NoteTextView(usingTextLayoutManager: false)
@@ -256,6 +256,7 @@ final class EditorView: NSView, NSTextViewDelegate {
     private let fileStatus = NSStackView()
     private let revealFileButton = NSButton()
     private let unsavedLabel = NSTextField(labelWithString: "Unsaved")
+    private lazy var revealFileButtonHeight = revealFileButton.heightAnchor.constraint(equalToConstant: 0)
     var onRenameFile: ((URL, String) -> Bool)?
     var sidebarVisible = false {
         didSet { needsLayout = true }
@@ -376,8 +377,10 @@ final class EditorView: NSView, NSTextViewDelegate {
         addSubview(fileStatus)
         NSLayoutConstraint.activate([
             fileStatus.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            fileStatus.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
+            fileStatus.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            revealFileButtonHeight
         ])
+        updateFileStatusHeight()
         updateFileStatus()
 
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -416,6 +419,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         revealFileButton.contentTintColor = palette.icons
         unsavedLabel.textColor = palette.secondaryText
         unsavedLabel.font = palette.statusFont
+        updateFileStatusHeight()
         fileStatus.layer?.backgroundColor = palette.editorBackground.cgColor
         titlebarBackdrop.needsDisplay = true
         topEdge.applyTheme()
@@ -460,6 +464,11 @@ final class EditorView: NSView, NSTextViewDelegate {
             scrollFrame.size.height = max(0, scrollFrame.height - EditorMetrics.titlebarHeight)
         }
         scrollView.frame = scrollFrame
+        // Text scrolls behind the titlebar, but the scroller starts below it.
+        let scrollerTop = scrollView.isFindBarVisible ? 0 : EditorMetrics.titlebarHeight
+        if scrollView.scrollerInsets.top != scrollerTop {
+            scrollView.scrollerInsets = NSEdgeInsets(top: scrollerTop, left: 0, bottom: 0, right: 0)
+        }
         let viewport = scrollView.contentSize
         let bottomInset = max(viewport.height / 2, 6 * textView.writingLineHeight + EditorMetrics.edgeHeight)
         let inset = max(EditorMetrics.minimumSideInset, (viewport.width - EditorMetrics.columnWidth) / 2)
@@ -568,6 +577,15 @@ final class EditorView: NSView, NSTextViewDelegate {
         needsLayout = true
     }
 
+    /// Size the button to the taller of icon and label, so the status keeps
+    /// one height and the icon stays put when "Unsaved" appears or hides.
+    private func updateFileStatusHeight() {
+        revealFileButtonHeight.isActive = false
+        let iconHeight = revealFileButton.intrinsicContentSize.height
+        revealFileButtonHeight.constant = ceil(max(iconHeight, unsavedLabel.intrinsicContentSize.height))
+        revealFileButtonHeight.isActive = true
+    }
+
     @objc private func revealCurrentFile() {
         guard let url = textView.note?.fileURL, FileManager.default.fileExists(atPath: url.path) else {
             updateFileStatus()
@@ -583,7 +601,6 @@ final class EditorView: NSView, NSTextViewDelegate {
 
     func display(_ note: NoteDocument) {
         updateFilename(note.fileURL)
-        scrollView.stopWheelAnimation()
         textView.breakUndoCoalescing()
         textView.note = nil
         textView.string = note.text
@@ -723,9 +740,7 @@ final class TitlebarBackdropView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// Trackpads already supply precise deltas and momentum. Only coarse mouse
-/// wheel events need interpolation between their otherwise abrupt jumps.
-final class SmoothScrollView: NSScrollView {
+final class EditorScrollView: NSScrollView {
     var onFindBarVisibilityChanged: (() -> Void)?
 
     override var isFindBarVisible: Bool {
@@ -741,98 +756,24 @@ final class SmoothScrollView: NSScrollView {
         set { super.scrollerStyle = .overlay }
     }
 
-    static let wheelDistanceMultiplier: CGFloat = 4
-    private var wheelDisplayLink: CADisplayLink?
-    private lazy var animationDriver = WheelAnimationDriver(scrollView: self)
-    private var wheelTarget: CGFloat = 0
-    private var wheelPosition: CGFloat = 0
-    private var lastFrameTime: TimeInterval = 0
-    private var previousPosition: CGFloat = 0
+    // Scroll speed. Tune these to taste: 1 is the macOS default.
+    static let wheelSpeed: Double = 2      // Mouse wheel (line-based steps).
+    static let trackpadSpeed: Double = 1.6 // Trackpad and Magic Mouse, including momentum.
 
     override func scrollWheel(with event: NSEvent) {
-        guard !event.hasPreciseScrollingDeltas,
-              event.scrollingDeltaY != 0,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
-            stopWheelAnimation()
-            super.scrollWheel(with: event)
-            return
-        }
-        // AppKit normally resolves pending text layout in its wheel handler.
-        // Do the same before clamping our destination, otherwise a freshly
-        // opened note may still have only a viewport-sized document frame.
-        if let textView = documentView as? NSTextView, let container = textView.textContainer {
-            textView.layoutManager?.ensureLayout(for: container)
-            textView.sizeToFit()
-        }
-        let current = contentView.bounds.minY
-        if wheelDisplayLink == nil {
-            wheelTarget = current
-            wheelPosition = current
-            previousPosition = current
-        }
-        // NSScrollView interprets a coarse delta in line units, not pixels.
-        let distance = -event.scrollingDeltaY * verticalLineScroll * Self.wheelDistanceMultiplier
-        if (wheelTarget - current) * distance < 0 {
-            wheelTarget = current
-            wheelPosition = current
-        }
-        wheelTarget = constrainedY(wheelTarget + distance)
-        guard abs(wheelTarget - current) > 0.1 else { return }
-        flashScrollers()
-        guard wheelDisplayLink == nil else { return }
-        lastFrameTime = ProcessInfo.processInfo.systemUptime
-        let link = displayLink(target: animationDriver, selector: #selector(WheelAnimationDriver.tick(_:)))
-        wheelDisplayLink = link
-        link.add(to: .main, forMode: .common)
+        let speed = event.hasPreciseScrollingDeltas ? Self.trackpadSpeed : Self.wheelSpeed
+        super.scrollWheel(with: Self.scaled(event, by: speed))
     }
 
-    func stopWheelAnimation() {
-        wheelDisplayLink?.invalidate()
-        wheelDisplayLink = nil
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil { stopWheelAnimation() }
-        super.viewWillMove(toWindow: newWindow)
-    }
-
-    private func constrainedY(_ y: CGFloat) -> CGFloat {
-        var proposed = contentView.bounds
-        proposed.origin.y = y
-        return contentView.constrainBoundsRect(proposed).minY
-    }
-
-    fileprivate func advanceWheelAnimation() {
-        let current = contentView.bounds.minY
-        // Scrollbar dragging, keyboard navigation, and selection must take over
-        // immediately, rather than fighting a remaining wheel animation.
-        guard abs(current - previousPosition) < 1 else { stopWheelAnimation(); return }
-        let now = ProcessInfo.processInfo.systemUptime
-        let elapsed = min(now - lastFrameTime, 0.05)
-        lastFrameTime = now
-        wheelTarget = constrainedY(wheelTarget)
-        let remaining = wheelTarget - wheelPosition
-        // Keep the continuous position separate from NSClipView's pixel-rounded
-        // bounds so that the animation cannot stall a fraction before its end.
-        wheelPosition = abs(remaining) < 0.3 ? wheelTarget : wheelPosition + remaining * (1 - exp(-elapsed / 0.045))
-        contentView.scroll(to: NSPoint(x: contentView.bounds.minX, y: wheelPosition))
-        reflectScrolledClipView(contentView)
-        previousPosition = contentView.bounds.minY
-        if abs(wheelTarget - wheelPosition) < 0.3 {
-            contentView.scroll(to: NSPoint(x: contentView.bounds.minX, y: wheelTarget))
-            reflectScrolledClipView(contentView)
-            stopWheelAnimation()
-        }
-    }
-}
-
-@MainActor
-private final class WheelAnimationDriver: NSObject {
-    weak var scrollView: SmoothScrollView?
-    init(scrollView: SmoothScrollView) { self.scrollView = scrollView }
-    @objc func tick(_ link: CADisplayLink) {
-        guard let scrollView else { link.invalidate(); return }
-        scrollView.advanceWheelAnimation()
+    static func scaled(_ event: NSEvent, by speed: Double) -> NSEvent {
+        guard speed != 1, let cgEvent = event.cgEvent?.copy() else { return event }
+        let lines = Double(cgEvent.getIntegerValueField(.scrollWheelEventDeltaAxis1))
+        let fixed = cgEvent.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
+        let points = Double(cgEvent.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))
+        cgEvent.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64((lines * speed).rounded()))
+        cgEvent.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fixed * speed)
+        cgEvent.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64((points * speed).rounded()))
+        return NSEvent(cgEvent: cgEvent) ?? event
     }
 }
 

@@ -366,7 +366,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
             if focusEditor { window?.makeFirstResponder(editor.textView) }
             return
         }
-        editor.scrollView.stopWheelAnimation()
         editor.textView.breakUndoCoalescing()
         if let activeTab, activeTab.document === document {
             activeTab.selection = editor.textView.selectedRange()
@@ -536,7 +535,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
             sidebar.setFolder(parent)
         }
         sidebar.revealFile(url)
-        if !sidebarVisible { toggleSidebar(nil) }
     }
 
     private func renameFile(_ url: URL, to name: String) -> Bool {
@@ -642,7 +640,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     }
 
     @objc func toggleSidebar(_ sender: Any?) {
-        editor.scrollView.stopWheelAnimation()
         let scrollPosition = editor.scrollView.contentView.bounds.origin
         defer {
             // Resizing the split view lets AppKit scroll the text view while
