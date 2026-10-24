@@ -10,14 +10,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         fontSettings?.window?.makeKeyAndOrderFront(sender)
     }
 
-    @objc func toggleSystemMonospace(_ sender: Any?) { EditorSession.toggleSystemMonospace() }
+    @objc func toggleSecondaryFont(_ sender: Any?) { EditorSession.toggleSecondaryFont() }
 
     @objc func toggleDarkTheme(_ sender: Any?) { AppTheme.toggle() }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if item.action == #selector(toggleSystemMonospace(_:)) {
-            item.state = EditorSession.systemMonospace && EditorSession.fontFamily.isEmpty ? .on : .off
-            return EditorSession.fontFamily.isEmpty
+        if item.action == #selector(toggleSecondaryFont(_:)) {
+            item.state = EditorSession.usesSecondaryFont ? .on : .off
         }
         if item.action == #selector(toggleDarkTheme(_:)) {
             item.state = AppTheme.isDark ? .on : .off
@@ -52,6 +51,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    @objc func newTab(_ sender: Any?) {
+        if let controller = NSApp.mainWindow?.windowController as? EditorWindowController {
+            controller.newTab(sender)
+        } else {
+            documentController.newDocument(sender)
+        }
+    }
+
+    /// Editor windows close their selected tab; other windows simply close.
+    @objc func closeCurrentTab(_ sender: Any?) {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        if let controller = window.windowController as? EditorWindowController {
+            controller.closeCurrentTab(sender)
+        } else {
+            window.performClose(sender)
+        }
+    }
+
     @objc func newNote(_ sender: Any?) {
         if let controller = NSApp.keyWindow?.windowController as? EditorWindowController {
             controller.newNote(sender)
@@ -75,7 +92,17 @@ final class FileDocumentController: NSDocumentController {
 
     override func openDocument(withContentsOf url: URL, display displayDocument: Bool,
                                completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) {
-        super.openDocument(withContentsOf: url, display: displayDocument) { document, alreadyOpen, error in
+        // Files opened from Finder or the Open panel become tabs of the front window.
+        let host = displayDocument ? NSApp.mainWindow?.windowController as? EditorWindowController : nil
+        super.openDocument(withContentsOf: url, display: displayDocument && host == nil) { document, alreadyOpen, error in
+            if let host, let note = document as? NoteDocument {
+                if alreadyOpen || note.tabHost != nil {
+                    note.showWindows()
+                } else if !host.openTab(note) {
+                    note.makeWindowControllers()
+                    note.showWindows()
+                }
+            }
             if let error = error as NSError?,
                error.domain == NSCocoaErrorDomain,
                error.code == NSFileReadInapplicableStringEncodingError {

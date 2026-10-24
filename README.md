@@ -10,3 +10,4 @@ To build a standalone app:
 ./scripts/build.sh
 open build/char.app
 ```
+asdasd  

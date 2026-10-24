@@ -57,8 +57,12 @@ private final class FolderCellView: NSTableCellView {
     func applyTheme() {
         // AppKit uses .dark for the emphasized selection, and .light when
         // the outline loses focus and displays a pale selection instead.
-        textField?.textColor = !AppTheme.isDark && backgroundStyle == .dark
-            ? .white : AppTheme.palette.sidebarText
+        let isRenaming = (textField as? InlineFilenameField)?.isRenaming == true
+        let textColor: NSColor = isRenaming
+            ? (AppTheme.isDark ? AppTheme.palette.sidebarText : .black)
+            : (!AppTheme.isDark && backgroundStyle == .dark ? .white : AppTheme.palette.sidebarText)
+        textField?.textColor = textColor
+        textField?.currentEditor()?.textColor = textColor
         textField?.font = AppTheme.palette.sidebarFont
         imageView?.contentTintColor = AppTheme.palette.icons
     }
@@ -429,11 +433,13 @@ final class FolderBrowser: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     private func beginRename(at row: Int) {
         guard itemURL(at: row) != nil,
-              let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView,
+              let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? FolderCellView,
               let field = cell.textField as? InlineFilenameField else { return }
         renamingField?.cancelRename()
         renamingField = field
-        field.onEditingEnded = { [weak self] in
+        field.onEditingBegan = { [weak cell] in cell?.applyTheme() }
+        field.onEditingEnded = { [weak self, weak cell] in
+            cell?.applyTheme()
             guard let self else { return }
             self.renamingField = nil
             if self.reloadAfterRename {

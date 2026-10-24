@@ -10,24 +10,30 @@ struct ThemePalette {
     let secondaryText: NSColor
     let icons: NSColor
     let divider: NSColor
+    let activeTab: NSColor
+    let hoveredTab: NSColor
     // Empty family uses the system font. Settings overrides the editor family.
     var editorFontFamily = ""
     var sidebarFont: NSFont = .systemFont(ofSize: 13)
     var titleFont: NSFont = .systemFont(ofSize: 14, weight: .bold)
     var statusFont: NSFont = .systemFont(ofSize: 15)
+    var tabFont: NSFont = .systemFont(ofSize: 13)
 
     static let light = ThemePalette(
-        editorBackground: NSColor(white: 0.965, alpha: 1),
+        editorBackground: NSColor(white: 0.985, alpha: 1),
         sidebarBackground: NSColor(white: 0.930, alpha: 1),
         text: NSColor(white: 0.22, alpha: 1),
         sidebarText: NSColor(white: 0.15, alpha: 1),
         secondaryText: NSColor(white: 0.4, alpha: 1),
         icons: NSColor(white: 0.45, alpha: 1),
         divider: NSColor(white: 0.88, alpha: 1),
+        activeTab: NSColor(srgbRed: 0.80, green: 0.815, blue: 0.84, alpha: 1),
+        hoveredTab: NSColor(srgbRed: 0.895, green: 0.905, blue: 0.92, alpha: 1),
         editorFontFamily: "",
         sidebarFont: .systemFont(ofSize: 13),
         titleFont: .systemFont(ofSize: 14, weight: .bold),
-        statusFont: .systemFont(ofSize: 15)
+        statusFont: .systemFont(ofSize: 15),
+        tabFont: .systemFont(ofSize: 13)
     )
 
     static let dark = ThemePalette(
@@ -38,10 +44,13 @@ struct ThemePalette {
         secondaryText: NSColor(white: 0.62, alpha: 1),
         icons: NSColor(white: 0.65, alpha: 1),
         divider: NSColor(white: 0.24, alpha: 1),
+        activeTab: NSColor(white: 0.27, alpha: 1),
+        hoveredTab: NSColor(white: 0.19, alpha: 1),
         editorFontFamily: "",
         sidebarFont: .systemFont(ofSize: 13),
         titleFont: .systemFont(ofSize: 14, weight: .bold),
-        statusFont: .systemFont(ofSize: 15)
+        statusFont: .systemFont(ofSize: 15),
+        tabFont: .systemFont(ofSize: 13)
     )
 }
 

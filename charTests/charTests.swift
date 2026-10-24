@@ -96,7 +96,7 @@ final class DocumentTests: XCTestCase {
         let sidebarScroll = try XCTUnwrap(sidebar.subviews.first { $0 is NSScrollView } as? NSScrollView)
         let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
             modifierFlags: [.command, .shift], timestamp: 0, windowNumber: window.windowNumber,
-            context: nil, characters: "M", charactersIgnoringModifiers: "m", isARepeat: false, keyCode: 46))
+            context: nil, characters: "D", charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2))
         for dark in [true, false] {
             XCTAssertTrue(split.performKeyEquivalent(with: event))
             XCTAssertEqual(AppTheme.isDark, dark)
@@ -246,6 +246,54 @@ final class DocumentTests: XCTestCase {
         XCTAssertTrue(panel.allowsOtherFileTypes)
         XCTAssertEqual(panel.allowedContentTypes.first?.preferredFilenameExtension, "txt")
         XCTAssertEqual(panel.nameFieldStringValue, "Untitled.txt")
+    }
+
+    func testWordDeletionSeparatesWordsAndRepeatedSpecialCharacters() throws {
+        let note = NoteDocument()
+        note.makeWindowControllers()
+        defer { note.close() }
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        let editor = controller.editor.textView
+        let undo = try XCTUnwrap(note.undoManager)
+        undo.groupsByEvent = false
+        let cases: [(String, Int, Int, String, Int)] = [
+            ("*aaa*", 5, 0, "*aaa", 4),
+            ("*bbb'", 5, 0, "*bbb", 4),
+            ("*aaa*", 4, 0, "**", 1),
+            (".          ", 11, 0, ".", 1),
+            ("word\t\t", 6, 0, "word", 4),
+            ("word  \t\t", 8, 0, "word  ", 6),
+            ("word***", 7, 0, "word", 4),
+            ("word*!", 6, 0, "word*", 5),
+            ("foo_bar123", 10, 0, "foo_", 4),
+            ("*cafe\u{301}", 6, 0, "*", 1),
+            ("*日本語", 4, 0, "*", 1),
+            ("a👨‍👩‍👧‍👦👨‍👩‍👧‍👦", 23, 0, "a", 1),
+            ("one\n\ntwo", 5, 0, "one\ntwo", 4),
+            ("hello world", 8, 0, "hello rld", 6),
+            ("*aaa*", 1, 3, "**", 1),
+            ("abc", 0, 0, "abc", 0),
+            ("", 0, 0, "", 0)
+        ]
+        for (text, location, length, expected, caret) in cases {
+            note.text = text
+            controller.display(note)
+            undo.removeAllActions()
+            editor.setSelectedRange(NSRange(location: location, length: length))
+            undo.beginUndoGrouping()
+            editor.doCommand(by: #selector(NSResponder.deleteWordBackward(_:)))
+            editor.breakUndoCoalescing()
+            undo.endUndoGrouping()
+            XCTAssertEqual(editor.string, expected, text)
+            XCTAssertEqual(note.text, expected, text)
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: caret, length: 0), text)
+            if expected != text {
+                undo.undo()
+                XCTAssertEqual(note.text, text)
+                undo.redo()
+                XCTAssertEqual(note.text, expected)
+            }
+        }
     }
 
     func testReturnCopiesLeadingTabsAndSupportsUndo() throws {
@@ -681,6 +729,162 @@ final class DocumentTests: XCTestCase {
         wait(for: [loaded], timeout: 5)
     }
 
+    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) {
+        let met = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            MainActor.assumeIsolated { condition() }
+        }, object: nil)
+        wait(for: [met], timeout: 5)
+    }
+
+    func testSidebarOpensPreviewTabsThatBecomePermanentWhenEdited() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let urls = ["a.txt", "b.txt", "c.txt"].map { directory.appendingPathComponent($0) }
+        for url in urls { try Data("Text of \(url.lastPathComponent)".utf8).write(to: url) }
+        let blank = NoteDocument()
+        NSDocumentController.shared.addDocument(blank)
+        blank.makeWindowControllers()
+        let controller = try XCTUnwrap(blank.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close(); (controller.document as? NSDocument)?.close() }
+        let split = try XCTUnwrap(window.contentView as? NSSplitView)
+        let sidebar = try XCTUnwrap(split.arrangedSubviews.first as? FolderBrowser)
+        func active() -> URL? { (controller.document as? NoteDocument)?.fileURL }
+
+        // The untouched untitled note is replaced, then the preview is reused.
+        sidebar.onSelectFile?(urls[0])
+        waitUntil { active() == urls[0] }
+        XCTAssertEqual(controller.tabs.count, 1)
+        XCTAssertTrue(controller.tabs[0].isPreview)
+        XCTAssertFalse(NSDocumentController.shared.documents.contains { $0 === blank })
+        XCTAssertFalse(controller.editor.showsTabs)
+        sidebar.onSelectFile?(urls[1])
+        waitUntil { active() == urls[1] }
+        XCTAssertEqual(controller.tabs.count, 1)
+        XCTAssertNil(NSDocumentController.shared.document(for: urls[0]))
+
+        // Editing keeps the tab; the next file opens beside it.
+        let undo = try XCTUnwrap((controller.document as? NoteDocument)?.undoManager)
+        undo.groupsByEvent = false
+        undo.beginUndoGrouping()
+        controller.editor.textView.insertText("Edited ", replacementRange: NSRange(location: 0, length: 0))
+        controller.editor.textView.breakUndoCoalescing()
+        undo.endUndoGrouping()
+        XCTAssertFalse(controller.tabs[0].isPreview)
+        XCTAssertEqual(controller.editor.tabBar.items.first?.isEdited, true)
+        sidebar.onSelectFile?(urls[2])
+        waitUntil { active() == urls[2] }
+        XCTAssertEqual(controller.tabs.map { $0.document.fileURL }, [urls[1], urls[2]])
+        XCTAssertTrue(controller.tabs[1].isPreview)
+        XCTAssertTrue(controller.editor.showsTabs)
+
+        // A file opens once: selecting it again shows its tab with its edits.
+        sidebar.onSelectFile?(urls[1])
+        XCTAssertEqual(active(), urls[1])
+        XCTAssertEqual(controller.tabs.count, 2)
+        XCTAssertTrue(controller.editor.textView.string.hasPrefix("Edited "))
+    }
+
+    func testSavingPreviewMakesItPermanent() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let urls = ["a.txt", "b.txt"].map { directory.appendingPathComponent($0) }
+        for url in urls { try Data("Saved".utf8).write(to: url) }
+        let blank = NoteDocument()
+        NSDocumentController.shared.addDocument(blank)
+        blank.makeWindowControllers()
+        let controller = try XCTUnwrap(blank.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close(); (controller.document as? NSDocument)?.close() }
+        let sidebar = try XCTUnwrap((window.contentView as? NSSplitView)?.arrangedSubviews.first as? FolderBrowser)
+        sidebar.onSelectFile?(urls[0])
+        waitUntil { (controller.document as? NoteDocument)?.fileURL == urls[0] }
+        let note = try XCTUnwrap(controller.document as? NoteDocument)
+        XCTAssertFalse(note.isDocumentEdited)
+        let saved = expectation(description: "Unedited preview saves")
+        note.save(to: urls[0], ofType: "public.plain-text", for: .saveOperation) { error in
+            XCTAssertNil(error)
+            saved.fulfill()
+        }
+        wait(for: [saved], timeout: 5)
+        XCTAssertFalse(controller.tabs[0].isPreview)
+        sidebar.onSelectFile?(urls[1])
+        waitUntil { (controller.document as? NoteDocument)?.fileURL == urls[1] }
+        XCTAssertEqual(controller.tabs.count, 2)
+    }
+
+    func testTabsCycleReorderAndClose() throws {
+        let first = NoteDocument()
+        NSDocumentController.shared.addDocument(first)
+        first.makeWindowControllers()
+        let controller = try XCTUnwrap(first.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close(); (controller.document as? NSDocument)?.close() }
+        controller.showWindow(nil)
+        controller.editor.textView.insertText("First", replacementRange: NSRange(location: 0, length: 0))
+        controller.editor.textView.setSelectedRange(NSRange(location: 2, length: 1))
+        controller.newTab(nil)
+        controller.newTab(nil)
+        XCTAssertEqual(controller.tabs.count, 3)
+        let notes = controller.tabs.map(\.document)
+        XCTAssertTrue(controller.document === notes[2])
+        XCTAssertEqual(controller.editor.textView.string, "")
+        XCTAssertEqual(controller.editor.tabBar.items.map(\.isActive), [false, false, true])
+
+        // Cmd-Option-Right wraps from the last tab to the first.
+        let split = try XCTUnwrap(window.contentView as? NSSplitView)
+        let right = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.command, .option, .numericPad, .function],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            characters: String(UnicodeScalar(NSRightArrowFunctionKey)!),
+            charactersIgnoringModifiers: String(UnicodeScalar(NSRightArrowFunctionKey)!),
+            isARepeat: false, keyCode: 124))
+        XCTAssertTrue(split.performKeyEquivalent(with: right))
+        XCTAssertTrue(controller.document === notes[0])
+        XCTAssertEqual(controller.editor.textView.string, "First")
+        XCTAssertEqual(controller.editor.textView.selectedRange(), NSRange(location: 2, length: 1))
+        controller.selectPreviousTab(nil)
+        XCTAssertTrue(controller.document === notes[2])
+        controller.selectNextTab(nil)
+        XCTAssertTrue(controller.document === notes[0])
+
+        controller.editor.tabBar.onMove?(0, 2)
+        XCTAssertTrue(controller.tabs.map(\.document).elementsEqual([notes[1], notes[2], notes[0]], by: ===))
+        XCTAssertTrue(controller.document === notes[0])
+
+        // Closing a clean background tab keeps the selection.
+        controller.editor.tabBar.onClose?(0)
+        XCTAssertTrue(controller.tabs.map(\.document).elementsEqual([notes[2], notes[0]], by: ===))
+        XCTAssertTrue(controller.document === notes[0])
+        XCTAssertFalse(NSDocumentController.shared.documents.contains { $0 === notes[1] })
+        // Closing the selected clean tab selects its neighbor.
+        controller.selectTab(controller.tabs[0])
+        controller.closeCurrentTab(nil)
+        XCTAssertEqual(controller.tabs.count, 1)
+        XCTAssertTrue(controller.document === notes[0])
+        XCTAssertFalse(controller.editor.showsTabs)
+        XCTAssertTrue(window.isVisible)
+    }
+
+    func testOnlyTabsKeepTitlebarOpaqueInWideWindows() throws {
+        let note = NoteDocument()
+        NSDocumentController.shared.addDocument(note)
+        note.makeWindowControllers()
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close(); (controller.document as? NSDocument)?.close() }
+        window.setFrame(NSRect(x: 0, y: 0, width: 1600, height: 800), display: true)
+        let backdrop = try XCTUnwrap(controller.editor.subviews.first { $0 is TitlebarBackdropView })
+        controller.editor.layoutSubtreeIfNeeded()
+        XCTAssertTrue(backdrop.isHidden)
+        controller.newTab(nil)
+        controller.editor.layoutSubtreeIfNeeded()
+        XCTAssertFalse(backdrop.isHidden)
+        XCTAssertFalse(controller.editor.tabBar.isHidden)
+    }
+
     func testFolderExpansionSettlesAndKeepsSiblingRowsVisible() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let journal = directory.appendingPathComponent("Journal")
@@ -1113,7 +1317,7 @@ final class DocumentTests: XCTestCase {
     }
 
     func testFontPreferencesToggleCustomFamilyAndRestoreDefaults() throws {
-        let keys = ["noteFontSize", "noteFontFamily", "noteSystemMonospace"]
+        let keys = ["noteFontSize", "noteFontFamily", "noteSecondaryFontFamily", "noteUsesSecondaryFont"]
         let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
         defer {
             for (key, value) in zip(keys, saved) {
@@ -1128,21 +1332,41 @@ final class DocumentTests: XCTestCase {
         defer { note.close() }
         let editor = try XCTUnwrap((note.windowControllers.first as? EditorWindowController)?.editor)
         editor.textView.setSelectedRange(NSRange(location: 2, length: 3))
-        EditorSession.toggleSystemMonospace()
+        // The secondary font defaults to the system monospace font.
+        EditorSession.toggleSecondaryFont()
         XCTAssertEqual(editor.textView.font?.fontName, NSFont.monospacedSystemFont(ofSize: 14, weight: .regular).fontName)
-        XCTAssertTrue(UserDefaults.standard.bool(forKey: "noteSystemMonospace"))
-        EditorSession.toggleSystemMonospace()
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "noteUsesSecondaryFont"))
+        EditorSession.toggleSecondaryFont()
         XCTAssertEqual(editor.textView.font?.fontName, NSFont.systemFont(ofSize: 14).fontName)
         let custom = try XCTUnwrap(NSFont(name: "Times-Roman", size: 19)?.familyName)
+        let secondary = try XCTUnwrap(NSFont(name: "Courier", size: 19)?.familyName)
         EditorSession.fontFamily = custom
+        EditorSession.secondaryFontFamily = secondary
         EditorSession.fontSize = 19
-        EditorSession.toggleSystemMonospace()
-        XCTAssertFalse(EditorSession.systemMonospace)
         XCTAssertEqual(editor.textView.font?.familyName, custom)
         XCTAssertEqual(editor.textView.font?.pointSize, 19)
+
+        // ⌘⇧M switches between the two families, whichever has focus.
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        controller.showWindow(nil)
+        let window = try XCTUnwrap(controller.window)
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [.command, .shift], timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, characters: "M", charactersIgnoringModifiers: "m", isARepeat: false, keyCode: 46))
+        XCTAssertTrue(window.performKeyEquivalent(with: event))
+        XCTAssertTrue(EditorSession.usesSecondaryFont)
+        XCTAssertEqual(editor.textView.font?.familyName, secondary)
+        XCTAssertEqual(editor.textView.font?.pointSize, 19)
+        XCTAssertTrue(window.performKeyEquivalent(with: event))
+        XCTAssertFalse(EditorSession.usesSecondaryFont)
+        XCTAssertEqual(editor.textView.font?.familyName, custom)
         XCTAssertEqual(UserDefaults.standard.string(forKey: "noteFontFamily"), custom)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "noteSecondaryFontFamily"), secondary)
         XCTAssertEqual(UserDefaults.standard.double(forKey: "noteFontSize"), 19)
+        EditorSession.toggleSecondaryFont()
         EditorSession.restoreDefaults()
+        XCTAssertFalse(EditorSession.usesSecondaryFont)
+        XCTAssertEqual(EditorSession.secondaryFontFamily, EditorSession.systemMonospaceFamily)
         XCTAssertEqual(editor.textView.font?.fontName, NSFont.systemFont(ofSize: 14).fontName)
         XCTAssertEqual(editor.textView.font?.pointSize, 14)
         XCTAssertEqual(editor.textView.selectedRange(), NSRange(location: 2, length: 3))
@@ -1170,6 +1394,46 @@ final class DocumentTests: XCTestCase {
         undo.redo()
         XCTAssertEqual(note.text, "A thought ☕️")
         XCTAssertTrue(note.isDocumentEdited)
+    }
+
+    func testTypingAfterSaveMarksDocumentEditedWithoutMovingCaret() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let note = NoteDocument()
+        note.makeWindowControllers()
+        defer { note.close() }
+        let editor = try XCTUnwrap((note.windowControllers.first as? EditorWindowController)?.editor)
+        let status = try XCTUnwrap(editor.subviews.compactMap { $0 as? NSStackView }.first)
+        let label = try XCTUnwrap(status.arrangedSubviews.last as? NSTextField)
+        let window = try XCTUnwrap(editor.window)
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(editor.textView)
+        // NSTextView coalesces consecutive keystrokes into one undo action, so
+        // later keystrokes register nothing and open no undo group. After each
+        // key, close any group a registration opened, as NSApplication's event
+        // loop does after dispatching an event.
+        func type(_ text: String) {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: 0)!
+            editor.textView.keyDown(with: event)
+            _ = (UndoManager.self as AnyObject).perform(Selector(("_endTopLevelGroupings")))
+        }
+        type("a")
+        type("b")
+        XCTAssertTrue(note.isDocumentEdited)
+        let saved = expectation(description: "Native document saves")
+        note.save(to: url, ofType: "public.plain-text", for: .saveOperation) { error in
+            XCTAssertNil(error)
+            saved.fulfill()
+        }
+        wait(for: [saved], timeout: 10)
+        XCTAssertFalse(note.isDocumentEdited)
+        XCTAssertTrue(label.isHidden)
+        type("c")
+        XCTAssertEqual(note.text, "abc")
+        XCTAssertTrue(note.isDocumentEdited)
+        XCTAssertFalse(label.isHidden)
     }
 
     func testReadFailurePreservesExistingText() {

@@ -14,6 +14,17 @@ enum EditorMetrics {
     static let filenameLeadingInset: CGFloat = 180
     static let filenameButtonSpacing: CGFloat = 31
     static let filenameSidebarInset: CGFloat = 12
+    static let tabBarHeight: CGFloat = 30
+    static let tabHeight: CGFloat = 26
+    static let tabSpacing: CGFloat = 4
+    static let tabMinWidth: CGFloat = 64
+    static let tabMaxWidth: CGFloat = 168
+    static let tabLeadingPadding: CGFloat = 10
+    static let tabTrailingPadding: CGFloat = 6
+    static let tabCloseSize: CGFloat = 16
+    static let tabCloseSpacing: CGFloat = 4
+    static let tabCornerRadius: CGFloat = 6
+    static let tabBarTrailingInset: CGFloat = 12
 }
 
 @MainActor
@@ -29,30 +40,38 @@ enum EditorSession {
             updateEditors()
         }
     }
+    // Font families are stored by name. Empty means the system font, and this
+    // hidden-style name (installed families never start with a dot) means the
+    // system monospace font.
+    static let systemMonospaceFamily = ".SystemMonospace"
     static var fontFamily: String {
         get { UserDefaults.standard.string(forKey: "noteFontFamily") ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: "noteFontFamily"); updateEditors() }
     }
-    static var systemMonospace: Bool {
-        get { UserDefaults.standard.bool(forKey: "noteSystemMonospace") }
-        set { UserDefaults.standard.set(newValue, forKey: "noteSystemMonospace"); updateEditors() }
+    static var secondaryFontFamily: String {
+        get { UserDefaults.standard.string(forKey: "noteSecondaryFontFamily") ?? systemMonospaceFamily }
+        set { UserDefaults.standard.set(newValue, forKey: "noteSecondaryFontFamily"); updateEditors() }
     }
+    static var usesSecondaryFont: Bool {
+        get { UserDefaults.standard.bool(forKey: "noteUsesSecondaryFont") }
+        set { UserDefaults.standard.set(newValue, forKey: "noteUsesSecondaryFont"); updateEditors() }
+    }
+    static var activeFontFamily: String { usesSecondaryFont ? secondaryFontFamily : fontFamily }
     static func font(ofSize size: CGFloat) -> NSFont {
-        let family = fontFamily.isEmpty ? AppTheme.palette.editorFontFamily : fontFamily
+        let active = activeFontFamily
+        if active == systemMonospaceFamily { return .monospacedSystemFont(ofSize: size, weight: .regular) }
+        let family = active.isEmpty ? AppTheme.palette.editorFontFamily : active
         if !family.isEmpty,
            let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: size) {
             return font
         }
-        return systemMonospace && fontFamily.isEmpty
-            ? .monospacedSystemFont(ofSize: size, weight: .regular)
-            : .systemFont(ofSize: size, weight: .regular)
+        return .systemFont(ofSize: size, weight: .regular)
     }
-    static func toggleSystemMonospace() {
-        guard fontFamily.isEmpty else { return }
-        systemMonospace.toggle()
-    }
+    static func toggleSecondaryFont() { usesSecondaryFont.toggle() }
     static func restoreDefaults() {
-        for key in ["noteFontSize", "noteFontFamily", "noteSystemMonospace"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["noteFontSize", "noteFontFamily", "noteSecondaryFontFamily", "noteUsesSecondaryFont"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         updateEditors()
     }
     private static func updateEditors() {
@@ -78,6 +97,40 @@ final class NoteTextView: NSTextView {
         let font = self.font ?? EditorSession.font(ofSize: EditorMetrics.defaultFontSize)
         return (layoutManager?.defaultLineHeight(for: font) ?? font.pointSize)
             + (defaultParagraphStyle?.lineSpacing ?? 0)
+    }
+
+    override func deleteWordBackward(_ sender: Any?) {
+        guard isEditable, !hasMarkedText(), selectedRanges.count == 1 else {
+            super.deleteWordBackward(sender)
+            return
+        }
+        let selection = selectedRange()
+        let text = string as NSString
+        guard selection.location != NSNotFound, NSMaxRange(selection) <= text.length else { return }
+        if selection.length > 0 {
+            deleteBackward(sender)
+            return
+        }
+        guard selection.location > 0 else { return }
+
+        // Walk whole graphemes so accented letters and emoji stay intact.
+        var range = text.rangeOfComposedCharacterSequence(at: selection.location - 1)
+        let last = text.substring(with: range)
+        if last.rangeOfCharacter(from: .newlines) != nil {
+            deleteBackward(sender)
+            return
+        }
+        let isWord = last.rangeOfCharacter(from: .alphanumerics) != nil
+        while range.location > 0 {
+            let previous = text.rangeOfComposedCharacterSequence(at: range.location - 1)
+            let character = text.substring(with: previous)
+            let matches = isWord
+                ? character.rangeOfCharacter(from: .alphanumerics) != nil
+                : character == last
+            guard matches else { break }
+            range = NSUnionRange(previous, range)
+        }
+        insertText("", replacementRange: range)
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -196,6 +249,8 @@ final class EditorView: NSView, NSTextViewDelegate {
     private let titlebarBackdrop = TitlebarBackdropView()
     private let filenameLabel = InlineFilenameField(labelWithString: "")
     private let filenameDivider = NSView()
+    let tabBar = TabBarView()
+    private var hasFilename = false
     private let fileStatus = NSStackView()
     private let revealFileButton = NSButton()
     private let unsavedLabel = NSTextField(labelWithString: "Unsaved")
@@ -294,6 +349,8 @@ final class EditorView: NSView, NSTextViewDelegate {
         filenameDivider.layer?.backgroundColor = AppTheme.palette.divider.cgColor
         filenameDivider.isHidden = true
         addSubview(filenameDivider)
+        tabBar.isHidden = true
+        addSubview(tabBar)
 
         revealFileButton.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Reveal in Finder")
         revealFileButton.isBordered = false
@@ -353,6 +410,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         filenameLabel.textColor = palette.text
         filenameLabel.font = palette.titleFont
         filenameDivider.layer?.backgroundColor = palette.divider.cgColor
+        tabBar.applyTheme()
         revealFileButton.contentTintColor = palette.icons
         unsavedLabel.textColor = palette.secondaryText
         unsavedLabel.font = palette.statusFont
@@ -426,7 +484,8 @@ final class EditorView: NSView, NSTextViewDelegate {
         let filenameX = filenameLeadingInset
         // Reserve the maximum title width even for short names or unsaved notes,
         // keeping this breakpoint stable when switching or saving documents.
-        titlebarBackdrop.isHidden = !scrollView.isFindBarVisible
+        // Tabs span the titlebar, so it stays opaque while they are shown.
+        titlebarBackdrop.isHidden = !scrollView.isFindBarVisible && !showsTabs
             && textView.textContainerInset.width > filenameX + EditorMetrics.filenameMaxWidth
         updateEdges()
     }
@@ -436,6 +495,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         // drawn behind it in the full-size editor view.
         titlebar.addSubview(filenameLabel)
         titlebar.addSubview(filenameDivider)
+        titlebar.addSubview(tabBar)
         layoutFilename()
     }
 
@@ -457,7 +517,29 @@ final class EditorView: NSView, NSTextViewDelegate {
         filenameLabel.frame = parent.backingAlignedRect(frame, options: .alignAllEdgesNearest)
         filenameDivider.frame = convert(NSRect(x: filenameX - 14, y: bounds.maxY - 31,
                                                width: 1, height: 14), to: parent)
-        filenameDivider.isHidden = sidebarVisible || filenameLabel.isHidden
+        // Inset by the tab padding, so the first title lines up with a lone filename.
+        let tabX = max(EditorMetrics.tabSpacing, filenameX - EditorMetrics.tabLeadingPadding)
+        let tabFrame = convert(NSRect(x: tabX,
+                                      y: bounds.maxY - EditorMetrics.titlebarHeight / 2 - EditorMetrics.tabBarHeight / 2,
+                                      width: max(0, bounds.maxX - EditorMetrics.tabBarTrailingInset - tabX),
+                                      height: EditorMetrics.tabBarHeight), to: parent)
+        tabBar.frame = parent.backingAlignedRect(tabFrame, options: .alignAllEdgesNearest)
+        tabBar.isHidden = !showsTabs
+        filenameLabel.isHidden = !hasFilename || showsTabs
+        filenameDivider.isHidden = sidebarVisible || (filenameLabel.isHidden && tabBar.isHidden)
+    }
+
+    /// A single note keeps the plain filename title; two or more show tabs.
+    var showsTabs: Bool { tabBar.items.count > 1 }
+
+    func setTabs(_ items: [TabBarView.Item]) {
+        let wasShowingTabs = showsTabs
+        tabBar.items = items
+        if showsTabs != wasShowingTabs {
+            if showsTabs { filenameLabel.cancelRename() }
+            needsLayout = true
+        }
+        layoutFilename()
     }
 
     func updateFilename(_ url: URL?) {
@@ -468,7 +550,8 @@ final class EditorView: NSView, NSTextViewDelegate {
             return self?.onRenameFile?(url, name) ?? false
         }
         filenameLabel.toolTip = url?.lastPathComponent
-        filenameLabel.isHidden = url == nil
+        hasFilename = url != nil
+        filenameLabel.isHidden = !hasFilename || showsTabs
         needsLayout = true
         updateFileStatus()
     }
@@ -492,7 +575,8 @@ final class EditorView: NSView, NSTextViewDelegate {
     }
 
     func filenameContains(_ point: NSPoint) -> Bool {
-        !filenameLabel.isHidden && filenameLabel.convert(filenameLabel.bounds, to: nil).contains(point)
+        (!filenameLabel.isHidden && filenameLabel.convert(filenameLabel.bounds, to: nil).contains(point))
+            || tabBar.tabContains(point)
     }
 
     func display(_ note: NoteDocument) {

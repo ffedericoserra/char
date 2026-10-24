@@ -82,7 +82,9 @@ enum NoteFileOperations {
         }
         var trashedURL: NSURL?
         try FileManager.default.trashItem(at: url, resultingItemURL: &trashedURL)
-        if let document, let replacement {
+        if let note = document as? NoteDocument, let host = note.tabHost, host.removeTrashedTab(note) {
+            note.close()
+        } else if let document, let replacement {
             NSDocumentController.shared.addDocument(replacement)
             for controller in document.windowControllers {
                 document.removeWindowController(controller)
@@ -98,6 +100,10 @@ enum NoteFileOperations {
 @objc(NoteDocument)
 final class NoteDocument: NSDocument {
     var text = ""
+    /// The window showing this note as a tab, whether or not it is the selected one.
+    weak var tabHost: EditorWindowController?
+
+    var isBlank: Bool { fileURL == nil && !isDocumentEdited && text.isEmpty }
 
     // Explicit saving keeps the standard Save / Don't Save / Cancel close flow.
     override class var autosavesInPlace: Bool { false }
@@ -107,7 +113,24 @@ final class NoteDocument: NSDocument {
     override func updateChangeCount(_ change: NSDocument.ChangeType) {
         super.updateChangeCount(change)
         updateFileStatus()
+        tabHost?.documentStateDidChange(self)
     }
+
+    override func showWindows() {
+        // Each file opens once; bring its existing tab forward instead.
+        guard let tabHost else { return super.showWindows() }
+        tabHost.showTab(for: self)
+        tabHost.showWindow(nil)
+    }
+
+    override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?,
+                           contextInfo: UnsafeMutableRawPointer?) {
+        // Show the note whose changes the save sheet asks about.
+        if isDocumentEdited { tabHost?.showTab(for: self) }
+        super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
+    }
+
+    override var windowForSheet: NSWindow? { tabHost?.window ?? super.windowForSheet }
 
     private func updateFileStatus() {
         for case let controller as EditorWindowController in windowControllers {
@@ -153,8 +176,16 @@ final class NoteDocument: NSDocument {
     override func save(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType,
                        completionHandler: @escaping (Error?) -> Void) {
         let isFirstSave = fileURL == nil && (saveOperation == .saveOperation || saveOperation == .saveAsOperation)
+        // NSTextView coalesces a typing run into one undo action, so keystrokes
+        // after a save would register no change and leave the note marked saved.
+        for case let controller as EditorWindowController in windowControllers {
+            controller.editor.textView.breakUndoCoalescing()
+        }
         super.save(to: url, ofType: typeName, for: saveOperation) { error in
             self.updateFileStatus()
+            if error == nil, saveOperation == .saveOperation || saveOperation == .saveAsOperation {
+                self.tabHost?.documentDidSave(self)
+            }
             if error == nil, isFirstSave {
                 for case let controller as EditorWindowController in self.windowControllers {
                     controller.didSaveNewFile(at: url)
@@ -169,6 +200,7 @@ final class NoteDocument: NSDocument {
             for case let controller as EditorWindowController in windowControllers {
                 controller.documentLocationDidChange()
             }
+            tabHost?.documentStateDidChange(self)
         }
     }
 }

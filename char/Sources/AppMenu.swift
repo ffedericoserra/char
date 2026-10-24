@@ -24,12 +24,15 @@ enum AppMenu {
         let file = submenu("File", in: main)
         let newNote = item("New Note", #selector(AppDelegate.newNote(_:)), key: "n", in: file)
         newNote.target = NSApp.delegate
+        let newTab = item("New Tab", #selector(AppDelegate.newTab(_:)), key: "t", in: file)
+        newTab.target = NSApp.delegate
         item("New Window", #selector(NSDocumentController.newDocument(_:)), key: "n", modifiers: [.command, .shift], in: file)
         item("Open…", #selector(NSDocumentController.openDocument(_:)), key: "o", in: file)
         let folder = item("Open Folder…", #selector(AppDelegate.openFolder(_:)), key: "o", modifiers: [.command, .shift], in: file)
         folder.target = NSApp.delegate
         file.addItem(.separator())
-        item("Close", #selector(NSWindow.performClose(_:)), key: "w", in: file)
+        item("Close Tab", #selector(AppDelegate.closeCurrentTab(_:)), key: "w", in: file)
+        item("Close Window", #selector(NSWindow.performClose(_:)), key: "w", modifiers: [.command, .shift], in: file)
         item("Save…", #selector(NSDocument.save(_:)), key: "s", in: file)
         item("Save As…", #selector(NSDocument.saveAs(_:)), key: "s", modifiers: [.command, .shift], in: file)
         item("Revert to Saved…", #selector(NSDocument.revertToSaved(_:)), in: file)
@@ -48,10 +51,10 @@ enum AppMenu {
 
         let view = submenu("View", in: main)
         item("Toggle Sidebar", #selector(EditorWindowController.toggleSidebar(_:)), key: "e", modifiers: [.command, .shift], in: view)
-        let theme = item("Dark Theme", #selector(AppDelegate.toggleDarkTheme(_:)), key: "m", modifiers: [.command, .shift], in: view)
+        let theme = item("Dark Theme", #selector(AppDelegate.toggleDarkTheme(_:)), key: "d", modifiers: [.command, .shift], in: view)
         theme.target = NSApp.delegate
-        let mono = item("System Monospace", #selector(AppDelegate.toggleSystemMonospace(_:)), key: "d", modifiers: [.command, .shift], in: view)
-        mono.target = NSApp.delegate
+        let secondaryFont = item("Secondary Font", #selector(AppDelegate.toggleSecondaryFont(_:)), key: "m", modifiers: [.command, .shift], in: view)
+        secondaryFont.target = NSApp.delegate
         item("Increase Font Size", #selector(EditorWindowController.increaseFontSize(_:)), key: "+", in: view)
         item("Decrease Font Size", #selector(EditorWindowController.decreaseFontSize(_:)), key: "-", in: view)
         item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), key: "f", modifiers: [.command, .control], in: view)
@@ -59,6 +62,11 @@ enum AppMenu {
         let window = submenu("Window", in: main)
         item("Minimize", #selector(NSWindow.performMiniaturize(_:)), key: "m", in: window)
         item("Zoom", #selector(NSWindow.performZoom(_:)), in: window)
+        window.addItem(.separator())
+        item("Show Previous Tab", #selector(EditorWindowController.selectPreviousTab(_:)),
+             key: String(UnicodeScalar(NSLeftArrowFunctionKey)!), modifiers: [.command, .option], in: window)
+        item("Show Next Tab", #selector(EditorWindowController.selectNextTab(_:)),
+             key: String(UnicodeScalar(NSRightArrowFunctionKey)!), modifiers: [.command, .option], in: window)
         window.addItem(.separator())
         item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:)), in: window)
         NSApp.windowsMenu = window

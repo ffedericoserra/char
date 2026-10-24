@@ -7,7 +7,18 @@ private final class SidebarSplitView: NSSplitView {
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if event.type == .keyDown, modifiers == [.command, .shift],
            event.charactersIgnoringModifiers?.lowercased() == "m" {
+            EditorSession.toggleSecondaryFont()
+            return true
+        }
+        if event.type == .keyDown, modifiers == [.command, .shift],
+           event.charactersIgnoringModifiers?.lowercased() == "d" {
             AppTheme.toggle()
+            return true
+        }
+        if event.type == .keyDown, modifiers == [.command, .option], event.keyCode == 123 || event.keyCode == 124,
+           let window, window.attachedSheet == nil,
+           let controller = window.windowController as? EditorWindowController {
+            if event.keyCode == 124 { controller.selectNextTab(self) } else { controller.selectPreviousTab(self) }
             return true
         }
         if event.type == .keyDown, modifiers == [.command, .shift],
@@ -110,6 +121,12 @@ final class NoteWindow: NSWindow {
         }
     }
 
+    override func performClose(_ sender: Any?) {
+        // Ask about each tab's unsaved changes before the window itself closes.
+        if (windowController as? EditorWindowController)?.closeBackgroundTabsBeforeWindow() == true { return }
+        super.performClose(sender)
+    }
+
     func toggleMaximize() {
         guard let visibleFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame else { return }
         let fillsScreen = abs(frame.minX - visibleFrame.minX) < 2 && abs(frame.minY - visibleFrame.minY) < 2
@@ -144,6 +161,21 @@ final class NoteWindow: NSWindow {
     }
 }
 
+/// One open note in a window. A preview tab is replaced by the next file
+/// opened from the sidebar, until it is edited or saved.
+@MainActor
+final class EditorTab {
+    var document: NoteDocument
+    var isPreview: Bool
+    fileprivate var selection = NSRange(location: 0, length: 0)
+    fileprivate var scrollPosition: NSPoint?
+
+    init(document: NoteDocument, isPreview: Bool = false) {
+        self.document = document
+        self.isPreview = isPreview
+    }
+}
+
 final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate {
     let editor = EditorView()
     private let sidebar = FolderBrowser()
@@ -152,6 +184,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     private var sidebarWidth: CGFloat = 240
     private var pendingURL: URL?
     private var creatingNewNote = false
+    private(set) var tabs: [EditorTab] = []
+    private(set) var activeTab: EditorTab?
+    private var closingTab: EditorTab?
+    private var closeTabCompletion: ((Bool) -> Void)?
     private var sidebarButton: NSButton!
     private var noteToolbar: NSToolbar?
     private var noteAccessory: NSTitlebarAccessoryViewController?
@@ -191,13 +227,22 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         addTitlebarButtons(to: window)
 
         sidebar.onOpenFolder = { [weak self] in self?.openFolder(nil) }
-        sidebar.onSelectFile = { [weak self] in self?.openInCurrentWindow($0) }
+        sidebar.onSelectFile = { [weak self] in self?.open($0, preview: true) }
         sidebar.onRenameFile = { [weak self] url, name in self?.renameFile(url, to: name) ?? false }
         sidebar.onTrashFile = { [weak self] in self?.trashFile($0) }
         sidebar.onMoveFile = { [weak self] in self?.moveFile($0) }
         sidebar.onFilesChanged = { [weak self] in self?.refreshFileBrowsers() }
         sidebar.onNewFile = { [weak self] in self?.createFile() }
         editor.onRenameFile = { [weak self] url, name in self?.renameFile(url, to: name) ?? false }
+        editor.tabBar.onSelect = { [weak self] index in
+            guard let self, self.tabs.indices.contains(index) else { return }
+            self.selectTab(self.tabs[index])
+        }
+        editor.tabBar.onClose = { [weak self] index in
+            guard let self, self.tabs.indices.contains(index) else { return }
+            self.closeTab(self.tabs[index])
+        }
+        editor.tabBar.onMove = { [weak self] from, to in self?.moveTab(from: from, to: to) }
     }
 
     func applyTheme() {
@@ -218,10 +263,223 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
     }
 
     func display(_ note: NoteDocument, focusEditor: Bool = true) {
+        let tab: EditorTab
+        if let existing = self.tab(for: note) {
+            tab = existing
+        } else if let activeTab {
+            // The window's note was replaced in place (New Note, Trash).
+            if activeTab.document.tabHost === self { activeTab.document.tabHost = nil }
+            activeTab.document = note
+            activeTab.isPreview = false
+            activeTab.scrollPosition = nil
+            tab = activeTab
+        } else {
+            tab = EditorTab(document: note)
+            tabs.append(tab)
+        }
+        activeTab = tab
+        note.tabHost = self
         editor.display(note)
+        if let position = tab.scrollPosition {
+            let length = (note.text as NSString).length
+            let location = min(tab.selection.location, length)
+            editor.textView.setSelectedRange(NSRange(location: location, length: min(tab.selection.length, length - location)))
+            editor.restoreScrollPosition(position)
+            tab.scrollPosition = nil
+        }
         synchronizeWindowTitleWithDocumentName()
         sidebar.selectFile(note.fileURL)
+        updateTabBar()
         if focusEditor { window?.makeFirstResponder(editor.textView) }
+    }
+
+    // MARK: Tabs
+
+    func tab(for note: NoteDocument) -> EditorTab? { tabs.first { $0.document === note } }
+
+    private func updateTabBar() {
+        editor.setTabs(tabs.map { tab in
+            let url = tab.document.fileURL
+            return TabBarView.Item(id: ObjectIdentifier(tab), title: url?.lastPathComponent ?? tab.document.displayName,
+                                   toolTip: url?.path, isEdited: tab.document.isDocumentEdited,
+                                   isActive: tab === activeTab)
+        })
+    }
+
+    func documentStateDidChange(_ note: NoteDocument) {
+        if note.isDocumentEdited { tab(for: note)?.isPreview = false }
+        updateTabBar()
+    }
+
+    func documentDidSave(_ note: NoteDocument) {
+        tab(for: note)?.isPreview = false
+        updateTabBar()
+    }
+
+    func showTab(for note: NoteDocument) {
+        if let tab = tab(for: note) { selectTab(tab) }
+    }
+
+    func selectTab(_ tab: EditorTab, focusEditor: Bool = true) {
+        guard tabs.contains(where: { $0 === tab }), window?.attachedSheet == nil else { return }
+        guard tab !== activeTab || document !== tab.document else {
+            if focusEditor { window?.makeFirstResponder(editor.textView) }
+            return
+        }
+        editor.scrollView.stopWheelAnimation()
+        editor.textView.breakUndoCoalescing()
+        if let activeTab, activeTab.document === document {
+            activeTab.selection = editor.textView.selectedRange()
+            activeTab.scrollPosition = editor.scrollView.contentView.bounds.origin
+        }
+        if let current = document as? NoteDocument, current !== tab.document {
+            current.removeWindowController(self)
+        }
+        if document !== tab.document { tab.document.addWindowController(self) }
+        display(tab.document, focusEditor: focusEditor)
+    }
+
+    @objc func selectNextTab(_ sender: Any?) { cycleTab(by: 1) }
+    @objc func selectPreviousTab(_ sender: Any?) { cycleTab(by: -1) }
+
+    private func cycleTab(by offset: Int) {
+        guard tabs.count > 1, let activeTab, let index = tabs.firstIndex(where: { $0 === activeTab }) else { return }
+        selectTab(tabs[(index + offset + tabs.count) % tabs.count])
+    }
+
+    private func moveTab(from source: Int, to destination: Int) {
+        guard tabs.indices.contains(source), tabs.indices.contains(destination) else { return }
+        tabs.insert(tabs.remove(at: source), at: destination)
+        updateTabBar()
+    }
+
+    private func insertTab(_ tab: EditorTab, focusEditor: Bool = true) {
+        let index = activeTab.flatMap { active in tabs.firstIndex { $0 === active } }.map { $0 + 1 } ?? tabs.count
+        tabs.insert(tab, at: index)
+        tab.document.tabHost = self
+        selectTab(tab, focusEditor: focusEditor)
+    }
+
+    @objc func newTab(_ sender: Any?) {
+        guard pendingURL == nil, !creatingNewNote, closingTab == nil, window?.attachedSheet == nil else { return }
+        do {
+            guard let note = try NSDocumentController.shared.makeUntitledDocument(ofType: "public.plain-text") as? NoteDocument else { return }
+            NSDocumentController.shared.addDocument(note)
+            insertTab(EditorTab(document: note))
+        } catch { NSApp.presentError(error) }
+    }
+
+    @objc func closeCurrentTab(_ sender: Any?) {
+        guard let activeTab else { window?.performClose(sender); return }
+        closeTab(activeTab)
+    }
+
+    func closeTab(_ tab: EditorTab, completion: ((Bool) -> Void)? = nil) {
+        guard pendingURL == nil, !creatingNewNote, closingTab == nil, window?.attachedSheet == nil,
+              tabs.contains(where: { $0 === tab }) else {
+            completion?(false)
+            return
+        }
+        // Closing the last tab closes the window, with the usual save prompt.
+        guard tabs.count > 1 else {
+            window?.performClose(nil)
+            return
+        }
+        closingTab = tab
+        closeTabCompletion = completion
+        if tab === activeTab { editor.textView.breakUndoCoalescing() }
+        tab.document.canClose(withDelegate: self,
+                              shouldClose: #selector(finishCloseTab(_:shouldClose:contextInfo:)), contextInfo: nil)
+    }
+
+    @objc private func finishCloseTab(_ document: NSDocument, shouldClose: Bool,
+                                      contextInfo: UnsafeMutableRawPointer?) {
+        guard let tab = closingTab else { return }
+        let completion = closeTabCompletion
+        closingTab = nil
+        closeTabCompletion = nil
+        guard shouldClose, let index = tabs.firstIndex(where: { $0 === tab }) else {
+            completion?(false)
+            return
+        }
+        removeTab(at: index)
+        tab.document.tabHost = nil
+        tab.document.close()
+        completion?(true)
+    }
+
+    /// Detach a tab, selecting its right neighbor (or the new last tab) if it was active.
+    private func removeTab(at index: Int) {
+        let tab = tabs.remove(at: index)
+        if tab === activeTab, !tabs.isEmpty {
+            selectTab(tabs[min(index, tabs.count - 1)])
+        } else {
+            updateTabBar()
+        }
+    }
+
+    /// Returns false when the note is the window's only tab; it is then replaced instead.
+    func removeTrashedTab(_ note: NoteDocument) -> Bool {
+        guard tabs.count > 1, let index = tabs.firstIndex(where: { $0.document === note }) else { return false }
+        removeTab(at: index)
+        note.tabHost = nil
+        return true
+    }
+
+    /// Returns true while other tabs are still closing; the window closes after them.
+    func closeBackgroundTabsBeforeWindow() -> Bool {
+        guard tabs.count > 1, let activeTab else { return false }
+        let others = tabs.filter { $0 !== activeTab }
+        guard let next = others.first(where: { $0.document.isDocumentEdited }) ?? others.first else { return false }
+        closeTab(next) { [weak self] closed in
+            if closed { self?.window?.performClose(nil) }
+        }
+        return true
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        !closeBackgroundTabsBeforeWindow()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // A programmatic close skips the prompts; drop the notes in other tabs.
+        let background = tabs.filter { $0 !== activeTab }
+        tabs.removeAll { $0 !== activeTab }
+        for tab in background {
+            tab.document.tabHost = nil
+            tab.document.close()
+        }
+    }
+
+    /// Show a note opened from Finder or the Open panel as a tab of this window.
+    func openTab(_ note: NoteDocument) -> Bool {
+        guard pendingURL == nil, !creatingNewNote, closingTab == nil, window?.attachedSheet == nil else { return false }
+        place(note, preview: false)
+        showWindow(nil)
+        return true
+    }
+
+    private func place(_ note: NoteDocument, preview: Bool) {
+        // Reuse the preview tab, or an empty untitled note nobody has typed in.
+        let reusable = (preview ? tabs.first(where: \.isPreview) : nil)
+            ?? (activeTab?.document.isBlank == true ? activeTab : nil)
+        guard let reusable else {
+            insertTab(EditorTab(document: note, isPreview: preview), focusEditor: !preview)
+            return
+        }
+        let old = reusable.document
+        if document === old {
+            editor.textView.breakUndoCoalescing()
+            old.removeWindowController(self)
+        }
+        if reusable === activeTab { activeTab = nil }
+        reusable.document = note
+        reusable.isPreview = preview
+        reusable.scrollPosition = nil
+        old.tabHost = nil
+        note.tabHost = self
+        selectTab(reusable, focusEditor: !preview)
+        old.close()
     }
 
     func documentLocationDidChange() {
@@ -318,7 +576,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
                 try Data().write(to: url, options: .withoutOverwriting)
                 self.didSaveNewFile(at: url)
                 self.refreshFileBrowsers()
-                self.openInCurrentWindow(url)
+                self.open(url, preview: false)
             } catch { NSApp.presentError(error) }
         }
     }
@@ -390,55 +648,40 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         }
     }
 
-    private func openInCurrentWindow(_ url: URL) {
-        guard pendingURL == nil, !creatingNewNote, window?.attachedSheet == nil,
-              let note = document as? NoteDocument else { return }
-        if note.fileURL?.standardizedFileURL == url.standardizedFileURL { return }
-        if let existing = NSDocumentController.shared.document(for: url) {
-            existing.showWindows()
-            sidebar.selectFile(note.fileURL)
+    private func open(_ url: URL, preview: Bool) {
+        guard pendingURL == nil, !creatingNewNote, closingTab == nil, window?.attachedSheet == nil else { return }
+        if let existing = NSDocumentController.shared.document(for: url) as? NoteDocument {
+            if let tab = tab(for: existing) {
+                if !preview { tab.isPreview = false }
+                selectTab(tab, focusEditor: !preview)
+                if preview { sidebar.focusSelection() }
+            } else {
+                existing.showWindows()
+                sidebar.selectFile(activeTab?.document.fileURL)
+            }
             return
         }
         pendingURL = url
-        editor.textView.breakUndoCoalescing()
-        note.canClose(withDelegate: self,
-                      shouldClose: #selector(finishSwitch(_:shouldClose:contextInfo:)), contextInfo: nil)
-    }
-
-    @objc private func finishSwitch(_ oldDocument: NSDocument, shouldClose: Bool,
-                                    contextInfo: UnsafeMutableRawPointer?) {
-        guard let url = pendingURL else { return }
-        guard shouldClose else {
-            pendingURL = nil
-            sidebar.selectFile(oldDocument.fileURL)
-            return
-        }
-        // Read successfully before detaching the current document. A failed open
-        // must leave its window and unsaved text intact, even after Don't Save.
         NSDocumentController.shared.openDocument(withContentsOf: url, display: false) { [weak self] document, alreadyOpen, error in
             guard let self else { return }
             self.pendingURL = nil
             guard let note = document as? NoteDocument else {
                 if let error { NSApp.presentError(error) }
-                self.sidebar.selectFile(oldDocument.fileURL)
+                self.sidebar.selectFile(self.activeTab?.document.fileURL)
                 return
             }
             if alreadyOpen {
                 note.showWindows()
-                self.sidebar.selectFile(oldDocument.fileURL)
                 return
             }
-            oldDocument.removeWindowController(self)
             // display:false normally creates no controllers; remove any unused
             // ones so that this window remains the sole owner of the new note.
             for controller in note.windowControllers {
                 note.removeWindowController(controller)
                 controller.close()
             }
-            note.addWindowController(self)
-            self.display(note, focusEditor: false)
-            self.sidebar.focusSelection()
-            oldDocument.close()
+            self.place(note, preview: preview)
+            if preview { self.sidebar.focusSelection() }
         }
     }
 

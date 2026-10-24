@@ -7,24 +7,31 @@ private final class SettingsWindow: NSWindow {
 @MainActor
 final class FontSettingsController: NSWindowController {
     private let family = NSPopUpButton()
+    private let secondaryFamily = NSPopUpButton()
     private let size = NSPopUpButton()
-    private let mono = NSButton(checkboxWithTitle: "Use system monospace (⌘⇧D)", target: nil, action: nil)
 
     init() {
-        let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
+        let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 260),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Settings"
         window.isReleasedWhenClosed = false
         super.init(window: window)
-        family.addItem(withTitle: "System default")
-        for name in NSFontManager.shared.availableFontFamilies.sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending }) {
-            family.addItem(withTitle: name)
-            family.lastItem?.representedObject = name
+        let names = NSFontManager.shared.availableFontFamilies.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        for (popup, label) in [(family, "Primary note font family"), (secondaryFamily, "Secondary note font family")] {
+            popup.addItem(withTitle: "System default")
+            popup.lastItem?.representedObject = ""
+            popup.addItem(withTitle: "System monospace")
+            popup.lastItem?.representedObject = EditorSession.systemMonospaceFamily
+            popup.menu?.addItem(.separator())
+            for name in names {
+                popup.addItem(withTitle: name)
+                popup.lastItem?.representedObject = name
+            }
+            popup.widthAnchor.constraint(equalToConstant: 260).isActive = true
+            popup.target = self
+            popup.action = #selector(changeFamily)
+            popup.setAccessibilityLabel(label)
         }
-        family.widthAnchor.constraint(equalToConstant: 260).isActive = true
-        family.target = self
-        family.action = #selector(changeFamily)
-        family.setAccessibilityLabel("Note font family")
         for value in Int(EditorMetrics.minimumFontSize)...Int(EditorMetrics.maximumFontSize) {
             size.addItem(withTitle: "\(value) pt")
             size.lastItem?.tag = value
@@ -32,12 +39,13 @@ final class FontSettingsController: NSWindowController {
         size.target = self
         size.action = #selector(changeSize)
         size.setAccessibilityLabel("Note font size")
-        mono.target = self
-        mono.action = #selector(changeMonospace)
+        let hint = NSTextField(labelWithString: "Press ⌘⇧M to switch between the primary and secondary font.")
+        hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        hint.textColor = .secondaryLabelColor
         let restore = NSButton(title: "Restore Defaults", target: self, action: #selector(restoreDefaults))
         restore.bezelStyle = .rounded
         let rows = NSStackView(views: [
-            row("Font family", family), row("Font size", size), mono, restore
+            row("Primary font", family), row("Secondary font", secondaryFamily), row("Font size", size), hint, restore
         ])
         rows.orientation = .vertical
         rows.alignment = .leading
@@ -58,23 +66,24 @@ final class FontSettingsController: NSWindowController {
 
     private func row(_ title: String, _ control: NSView) -> NSView {
         let label = NSTextField(labelWithString: title)
-        label.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        label.widthAnchor.constraint(equalToConstant: 110).isActive = true
         let row = NSStackView(views: [label, control])
         row.spacing = 12
         return row
     }
 
     @objc private func refresh() {
-        family.selectItem(at: family.itemArray.firstIndex { ($0.representedObject as? String ?? "") == EditorSession.fontFamily } ?? 0)
+        for (popup, name) in [(family, EditorSession.fontFamily), (secondaryFamily, EditorSession.secondaryFontFamily)] {
+            popup.selectItem(at: popup.itemArray.firstIndex { $0.representedObject as? String == name } ?? 0)
+        }
         size.selectItem(withTag: Int(EditorSession.fontSize))
-        mono.isEnabled = EditorSession.fontFamily.isEmpty
-        mono.state = EditorSession.systemMonospace ? .on : .off
     }
 
-    @objc private func changeFamily() {
-        EditorSession.fontFamily = family.selectedItem?.representedObject as? String ?? ""
+    @objc private func changeFamily(_ sender: NSPopUpButton) {
+        let name = sender.selectedItem?.representedObject as? String ?? ""
+        if sender === secondaryFamily { EditorSession.secondaryFontFamily = name }
+        else { EditorSession.fontFamily = name }
     }
     @objc private func changeSize() { EditorSession.fontSize = CGFloat(size.selectedItem?.tag ?? 14) }
-    @objc private func changeMonospace() { EditorSession.toggleSystemMonospace() }
     @objc private func restoreDefaults() { EditorSession.restoreDefaults() }
 }
