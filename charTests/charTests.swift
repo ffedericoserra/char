@@ -997,6 +997,31 @@ final class DocumentTests: XCTestCase {
         notes[2].updateChangeCount(.changeCleared)
     }
 
+    func testSingleSavedNoteShowsLoneTabOverTransparentTitlebar() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        try Data("Text".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let note = try NoteDocument(contentsOf: url, ofType: "public.plain-text")
+        NSDocumentController.shared.addDocument(note)
+        note.makeWindowControllers()
+        let controller = try XCTUnwrap(note.windowControllers.first as? EditorWindowController)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close(); (controller.document as? NSDocument)?.close() }
+        window.setFrame(NSRect(x: 0, y: 0, width: 1600, height: 800), display: true)
+        controller.editor.layoutSubtreeIfNeeded()
+        let backdrop = try XCTUnwrap(controller.editor.subviews.first { $0 is TitlebarBackdropView })
+        XCTAssertTrue(backdrop.isHidden)
+        XCTAssertFalse(controller.editor.tabBar.isHidden)
+        XCTAssertTrue(controller.editor.tabBar.isSolo)
+        let tab = try XCTUnwrap(controller.editor.tabBar.subviews.first { $0.accessibilityRole() == .radioButton })
+        let close = try XCTUnwrap(tab.subviews.first { $0 is NSButton })
+        XCTAssertTrue(close.isHidden)
+        tab.mouseEntered(with: try XCTUnwrap(NSEvent.enterExitEvent(
+            with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil)))
+        XCTAssertFalse(close.isHidden)
+    }
+
     func testOnlyTabsKeepTitlebarOpaqueInWideWindows() throws {
         let note = NoteDocument()
         NSDocumentController.shared.addDocument(note)
@@ -1012,6 +1037,9 @@ final class DocumentTests: XCTestCase {
         controller.editor.layoutSubtreeIfNeeded()
         XCTAssertFalse(backdrop.isHidden)
         XCTAssertFalse(controller.editor.tabBar.isHidden)
+        controller.closeCurrentTab(nil)
+        controller.editor.layoutSubtreeIfNeeded()
+        XCTAssertTrue(backdrop.isHidden)
     }
 
     func testFolderExpansionSettlesAndKeepsSiblingRowsVisible() throws {

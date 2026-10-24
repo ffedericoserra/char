@@ -14,6 +14,8 @@ final class TabBarView: NSView {
     var items: [Item] = [] {
         didSet { if items != oldValue { rebuild() } }
     }
+    /// A lone tab stays plain until hovered, then shows as selected.
+    var isSolo: Bool { items.count == 1 }
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
     var onMove: ((Int, Int) -> Void)?
@@ -46,6 +48,7 @@ final class TabBarView: NSView {
         let views = items.map { item -> TabItemView in
             let view = existing.removeValue(forKey: item.id) ?? TabItemView(item: item, bar: self)
             view.item = item
+            view.applyTheme()
             return view
         }
         existing.values.forEach { $0.removeFromSuperview() }
@@ -84,7 +87,8 @@ final class TabBarView: NSView {
     fileprivate func updateSeparators() {
         let highlighted = itemViews.map(\.isHighlighted)
         for (index, separator) in separators.enumerated() where index < highlighted.count {
-            separator.isHidden = highlighted[index] || (index + 1 < highlighted.count && highlighted[index + 1])
+            separator.isHidden = isSolo || highlighted[index]
+                || (index + 1 < highlighted.count && highlighted[index + 1])
         }
     }
 
@@ -195,6 +199,7 @@ private final class TabItemView: NSView {
         }
     }
     var isHighlighted: Bool { item.isActive || isHovered }
+    private var showsSelected: Bool { bar?.isSolo == true ? isHovered : item.isActive }
 
     init(item: TabBarView.Item, bar: TabBarView) {
         self.item = item
@@ -250,7 +255,7 @@ private final class TabItemView: NSView {
         }
         toolTip = item.toolTip ?? item.title
         closeButton.contentTintColor = palette.secondaryText
-        closeButton.isHidden = !(item.isActive || isHovered)
+        closeButton.isHidden = !(showsSelected || isHovered)
         setAccessibilityLabel(item.title + (item.isEdited ? ", edited" : "") + (item.isStruckThrough ? ", deleted" : ""))
         setAccessibilityValue(item.isActive)
         needsLayout = true
@@ -284,7 +289,8 @@ private final class TabItemView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let color: NSColor? = item.isActive ? AppTheme.palette.activeTab : isHovered ? AppTheme.palette.hoveredTab : nil
+        let color: NSColor? = showsSelected ? AppTheme.palette.activeTab
+            : isHovered ? AppTheme.palette.hoveredTab : nil
         guard let color else { return }
         color.setFill()
         NSBezierPath(roundedRect: bounds, xRadius: EditorMetrics.tabCornerRadius,

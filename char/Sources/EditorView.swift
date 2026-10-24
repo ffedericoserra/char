@@ -535,21 +535,23 @@ final class EditorView: NSView, NSTextViewDelegate {
                                       width: max(0, bounds.maxX - EditorMetrics.tabBarTrailingInset - tabX),
                                       height: EditorMetrics.tabBarHeight), to: parent)
         tabBar.frame = parent.backingAlignedRect(tabFrame, options: .alignAllEdgesNearest)
-        tabBar.isHidden = !showsTabs
-        filenameLabel.isHidden = !hasFilename || showsTabs
+        tabBar.isHidden = !showsTabBar
+        filenameLabel.isHidden = !hasFilename || showsTabBar
         filenameDivider.isHidden = sidebarVisible || (filenameLabel.isHidden && tabBar.isHidden)
     }
 
-    /// A single note keeps the plain filename title; two or more show tabs.
+    /// Two or more tabs make the titlebar opaque; a single saved note shows
+    /// as a lone tab over the transparent titlebar.
     var showsTabs: Bool { tabBar.items.count > 1 }
+    private var showsTabBar: Bool { showsTabs || (tabBar.items.count == 1 && hasFilename) }
 
     func setTabs(_ items: [TabBarView.Item]) {
+        let wasShowingTabBar = showsTabBar
         let wasShowingTabs = showsTabs
         tabBar.items = items
-        if showsTabs != wasShowingTabs {
-            if showsTabs { filenameLabel.cancelRename() }
-            needsLayout = true
-        }
+        if showsTabBar != wasShowingTabBar, showsTabBar { filenameLabel.cancelRename() }
+        // Going from two tabs to a lone one keeps the bar but drops the backdrop.
+        if showsTabBar != wasShowingTabBar || showsTabs != wasShowingTabs { needsLayout = true }
         layoutFilename()
     }
 
@@ -562,7 +564,7 @@ final class EditorView: NSView, NSTextViewDelegate {
         }
         filenameLabel.toolTip = url?.lastPathComponent
         hasFilename = url != nil
-        filenameLabel.isHidden = !hasFilename || showsTabs
+        filenameLabel.isHidden = !hasFilename || showsTabBar
         needsLayout = true
         updateFileStatus()
     }
