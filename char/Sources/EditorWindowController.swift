@@ -149,15 +149,46 @@ final class NoteWindow: NSWindow {
         let nativeButtons = [ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { standardWindowButton($0) }
         for (index, (button, x)) in zip(nativeButtons + noteButtons, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
             guard let parent = button.superview else { continue }
-            // Fixed window-space centers: preserve the traffic lights and sidebar,
-            // with the new-note square sharing the sidebar symbol's bottom edge.
+            // Fixed window-space centers on whole points. TitlebarIconCell aligns
+            // the symbols inside their buttons, so no button needs its own offset.
             // Reapply after AppKit layout; never derive these from native frames.
-            let distanceFromTop: CGFloat = index == 4 ? 22 : 24
-            let center = parent.convert(NSPoint(x: x, y: frame.height - distanceFromTop), from: nil)
+            let center = parent.convert(NSPoint(x: x, y: frame.height - 24), from: nil)
             let origin = NSPoint(x: center.x - button.frame.width / 2, y: center.y - button.frame.height / 2)
             if button.frame.origin != origin { button.setFrameOrigin(origin) }
         }
         (windowController as? EditorWindowController)?.editor.layoutFilename()
+    }
+}
+
+/// Draws a titlebar symbol on whole points, with its alignment rect resting on
+/// a shared baseline. NSButton centers the image instead, which puts an odd-height
+/// symbol (square.and.pencil is 17pt tall) half a point off the pixel grid: whole-
+/// point button offsets can never line it up with an even-height one, and on
+/// 1x displays its edges blur across two pixel rows. NSButtonCell also shifts
+/// symbol images within any frame it is given, so the cell draws them itself.
+final class TitlebarIconCell: NSButtonCell {
+    /// Distance from the button's bottom edge to the symbols' alignment baseline.
+    static let baseline: CGFloat = 8
+
+    override func drawImage(_ image: NSImage, withFrame frame: NSRect, in controlView: NSView) {
+        let tint = (controlView as? NSButton)?.contentTintColor ?? .secondaryLabelColor
+        let tinted = NSImage(size: image.size, flipped: false) { bounds in
+            image.draw(in: bounds)
+            tint.set()
+            bounds.fill(using: .sourceAtop)
+            return true
+        }
+        tinted.draw(in: Self.imageFrame(for: image, in: controlView.bounds, flipped: controlView.isFlipped),
+                    from: .zero, operation: .sourceOver, fraction: isHighlighted ? 0.5 : 1,
+                    respectFlipped: true, hints: nil)
+    }
+
+    static func imageFrame(for image: NSImage, in bounds: NSRect, flipped: Bool) -> NSRect {
+        let size = image.size
+        let bottom = (baseline - image.alignmentRect.minY).rounded()
+        let x = (bounds.midX - size.width / 2).rounded()
+        let y = flipped ? bounds.maxY - bottom - size.height : bounds.minY + bottom
+        return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 }
 
@@ -771,8 +802,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
             splitView.addSubview(fullScreenControls)
             for (index, button) in window.noteButtons.enumerated() {
                 fullScreenControls.addSubview(button)
-                button.frame = NSRect(x: 8 + CGFloat(index) * 34, y: index == 1 ? 13 : 11,
-                                      width: 26, height: 26)
+                button.frame = NSRect(x: 8 + CGFloat(index) * 34, y: 11, width: 26, height: 26)
             }
             editor.installFilename(in: editor)
         } else {
@@ -824,8 +854,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         sidebarButton = titlebarButton("sidebar.left", label: "Toggle Sidebar", action: #selector(toggleSidebar(_:)))
         sidebarButton.frame = NSRect(x: 8, y: 11, width: 26, height: 26)
         sidebarButton.toolTip = "Show Sidebar (⌘⇧E)"
-        let newButton = titlebarButton("square.and.pencil", label: "New Note", action: #selector(newNote(_:)))
-        newButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        let newButton = titlebarButton("square.and.pencil", label: "New Note", action: #selector(newNote(_:)),
+                                       pointSize: 14)
         newButton.frame = NSRect(x: 42, y: 11, width: 26, height: 26)
         newButton.toolTip = "New Note (⌘N)"
         container.addSubview(sidebarButton)
@@ -838,12 +868,19 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
         (window as? NoteWindow)?.alignTitlebarControls()
     }
 
-    private func titlebarButton(_ symbol: String, label: String, action: Selector) -> NSButton {
-        let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
+    private func titlebarButton(_ symbol: String, label: String, action: Selector,
+                                pointSize: CGFloat = 13) -> NSButton {
+        let button = NSButton()
+        button.cell = TitlebarIconCell()
+        // Configure the image itself, so its size and alignment rect are the drawn ones.
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)!
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular))
+        button.imagePosition = .imageOnly
+        button.target = self
+        button.action = action
         button.bezelStyle = .inline
         button.isBordered = false
-        button.imageScaling = .scaleProportionallyDown
-        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        button.imageScaling = .scaleNone
         button.contentTintColor = AppTheme.palette.icons
         button.setAccessibilityLabel(label)
         return button

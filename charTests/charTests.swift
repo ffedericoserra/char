@@ -1022,6 +1022,38 @@ final class DocumentTests: XCTestCase {
         XCTAssertFalse(close.isHidden)
     }
 
+    func testTitlebarSymbolsShareCrispBottomEdgeAtEveryScale() throws {
+        let controller = EditorWindowController()
+        let window = try XCTUnwrap(controller.window as? NoteWindow)
+        defer { window.close() }
+        controller.showWindow(nil)
+        window.displayIfNeeded()
+        for scale in [1, 2] {
+            // Bottom ink edge of each symbol, in points from the window's top.
+            let edges = try window.noteButtons.map { button -> (bottom: CGFloat, alpha: CGFloat) in
+                let rep = try XCTUnwrap(NSBitmapImageRep(
+                    bitmapDataPlanes: nil, pixelsWide: Int(button.bounds.width) * scale,
+                    pixelsHigh: Int(button.bounds.height) * scale, bitsPerSample: 8, samplesPerPixel: 4,
+                    hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                rep.size = button.bounds.size
+                button.cacheDisplay(in: button.bounds, to: rep)
+                var lastRow = -1
+                var lastAlpha: CGFloat = 0
+                for y in 0..<rep.pixelsHigh {
+                    let alpha = (0..<rep.pixelsWide).map { rep.colorAt(x: $0, y: y)?.alphaComponent ?? 0 }.max() ?? 0
+                    if alpha > 0.05 { lastRow = y; lastAlpha = alpha }
+                }
+                let frame = button.convert(button.bounds, to: nil)
+                return (window.frame.height - frame.maxY + CGFloat(lastRow + 1) / CGFloat(scale), lastAlpha)
+            }
+            XCTAssertEqual(edges.count, 2)
+            XCTAssertEqual(edges[0].bottom, edges[1].bottom, "Symbols must share a bottom edge at \(scale)x")
+            for edge in edges {
+                XCTAssertGreaterThan(edge.alpha, 0.9, "A half-pixel edge blurs at \(scale)x")
+            }
+        }
+    }
+
     func testOnlyTabsKeepTitlebarOpaqueInWideWindows() throws {
         let note = NoteDocument()
         NSDocumentController.shared.addDocument(note)
@@ -1101,7 +1133,7 @@ final class DocumentTests: XCTestCase {
             for (index, (button, centerX)) in zip(controls, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
                 let frame = button.convert(button.bounds, to: nil)
                 XCTAssertEqual(frame.midX, centerX, accuracy: 0.5)
-                XCTAssertEqual(window.frame.height - frame.midY, index == 4 ? 22 : 24, accuracy: 0.5)
+                XCTAssertEqual(window.frame.height - frame.midY, 24, accuracy: 0.5)
             }
         }
     }
@@ -1165,7 +1197,7 @@ final class DocumentTests: XCTestCase {
             for (index, (button, x)) in zip(native + window.noteButtons, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
                 let frame = button.convert(button.bounds, to: nil)
                 XCTAssertEqual(frame.midX, x, accuracy: 0.5)
-                XCTAssertEqual(window.frame.height - frame.midY, index == 4 ? 22 : 24, accuracy: 0.5)
+                XCTAssertEqual(window.frame.height - frame.midY, 24, accuracy: 0.5)
             }
         }
     }
@@ -1209,7 +1241,7 @@ final class DocumentTests: XCTestCase {
             for button in window.noteButtons {
                 XCTAssertTrue(button.isDescendant(of: split))
                 XCTAssertEqual(button.convert(button.bounds, to: nil).midY,
-                               window.frame.height - (button === window.noteButtons.last ? 22 : 24), accuracy: 0.5)
+                               window.frame.height - 24, accuracy: 0.5)
             }
             controller.toggleSidebar(nil)
             XCTAssertEqual(split.arrangedSubviews.count, 2)
