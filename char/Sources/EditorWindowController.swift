@@ -150,9 +150,9 @@ final class NoteWindow: NSWindow {
         for (index, (button, x)) in zip(nativeButtons + noteButtons, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
             guard let parent = button.superview else { continue }
             // Fixed window-space centers: preserve the traffic lights and sidebar,
-            // with the new-note symbol optically aligned one point higher.
+            // with the new-note square sharing the sidebar symbol's bottom edge.
             // Reapply after AppKit layout; never derive these from native frames.
-            let distanceFromTop: CGFloat = index == 4 ? 23 : 24
+            let distanceFromTop: CGFloat = index == 4 ? 22 : 24
             let center = parent.convert(NSPoint(x: x, y: frame.height - distanceFromTop), from: nil)
             let origin = NSPoint(x: center.x - button.frame.width / 2, y: center.y - button.frame.height / 2)
             if button.frame.origin != origin { button.setFrameOrigin(origin) }
@@ -771,7 +771,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSSpli
             splitView.addSubview(fullScreenControls)
             for (index, button) in window.noteButtons.enumerated() {
                 fullScreenControls.addSubview(button)
-                button.frame = NSRect(x: 8 + CGFloat(index) * 34, y: index == 1 ? 12 : 11,
+                button.frame = NSRect(x: 8 + CGFloat(index) * 34, y: index == 1 ? 13 : 11,
                                       width: 26, height: 26)
             }
             editor.installFilename(in: editor)

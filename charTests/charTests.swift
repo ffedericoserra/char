@@ -1101,7 +1101,7 @@ final class DocumentTests: XCTestCase {
             for (index, (button, centerX)) in zip(controls, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
                 let frame = button.convert(button.bounds, to: nil)
                 XCTAssertEqual(frame.midX, centerX, accuracy: 0.5)
-                XCTAssertEqual(window.frame.height - frame.midY, index == 4 ? 23 : 24, accuracy: 0.5)
+                XCTAssertEqual(window.frame.height - frame.midY, index == 4 ? 22 : 24, accuracy: 0.5)
             }
         }
     }
@@ -1165,7 +1165,7 @@ final class DocumentTests: XCTestCase {
             for (index, (button, x)) in zip(native + window.noteButtons, [23.0, 43.0, 63.0, 102.0, 136.0]).enumerated() {
                 let frame = button.convert(button.bounds, to: nil)
                 XCTAssertEqual(frame.midX, x, accuracy: 0.5)
-                XCTAssertEqual(window.frame.height - frame.midY, index == 4 ? 23 : 24, accuracy: 0.5)
+                XCTAssertEqual(window.frame.height - frame.midY, index == 4 ? 22 : 24, accuracy: 0.5)
             }
         }
     }
@@ -1209,7 +1209,7 @@ final class DocumentTests: XCTestCase {
             for button in window.noteButtons {
                 XCTAssertTrue(button.isDescendant(of: split))
                 XCTAssertEqual(button.convert(button.bounds, to: nil).midY,
-                               window.frame.height - (button === window.noteButtons.last ? 23 : 24), accuracy: 0.5)
+                               window.frame.height - (button === window.noteButtons.last ? 22 : 24), accuracy: 0.5)
             }
             controller.toggleSidebar(nil)
             XCTAssertEqual(split.arrangedSubviews.count, 2)
